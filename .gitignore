@@ -1,2 +1,4 @@
 # Ignore log files/folders
 log/
+**/build/
+**/**/**/log/
