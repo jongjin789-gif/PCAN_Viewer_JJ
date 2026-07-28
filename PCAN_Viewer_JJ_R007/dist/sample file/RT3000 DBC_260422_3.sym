@@ -1,0 +1,345 @@
+FormatVersion=5.0 // Do not edit this line!
+Title="NAVconfig 1"
+
+{SENDRECEIVE}
+
+[GpsStatus]
+ID=500h
+DLC=8
+Var=GpsNumSats unsigned 32,8
+Var=GpsPosMode unsigned 40,8
+Var=GpsVelMode unsigned 48,8
+Var=GpsAttMode unsigned 56,8
+
+[PosNEDStdev]
+ID=503h
+DLC=8
+Var=PosNorthStdev unsigned 0,16 /u:m /f:0.001
+Var=PosEastStdev unsigned 16,16 /u:m /f:0.001
+Var=PosDownStdev unsigned 32,16 /u:m /f:0.001
+
+[VelNEDStdev]
+ID=504h
+DLC=8
+Var=VelNorthStdev unsigned 0,16 /u:m/s /f:0.001
+Var=VelEastStdev unsigned 16,16 /u:m/s /f:0.001
+Var=VelDownStdev unsigned 32,16 /u:m/s /f:0.001
+
+[AngleStdev]
+ID=505h
+DLC=8
+Var=AngleHeadingStdev unsigned 0,16 /u:¡Æ /f:0.0005729577951
+Var=AnglePitchStdev unsigned 16,16 /u:¡Æ /f:0.0005729577951
+Var=AngleRollStdev unsigned 32,16 /u:¡Æ /f:0.0005729577951
+
+[GyroBias]
+ID=506h
+DLC=8
+Var=GyroBias1 signed 0,16 /u:¡Æ /f:0.0002864788976 /min:-9.387340515 /max:9.387054037
+Var=GyroBias2 signed 16,16 /u:¡Æ /f:0.0002864788976 /min:-9.387340515 /max:9.387054037
+Var=GyroBias3 signed 32,16 /u:¡Æ /f:0.0002864788976 /min:-9.387340515 /max:9.387054037
+
+[AccelBias]
+ID=507h
+DLC=8
+Var=AccelBias1 signed 0,16 /u:m/s©÷ /f:0.0001
+Var=AccelBias2 signed 16,16 /u:m/s©÷ /f:0.0001
+Var=AccelBias3 signed 32,16 /u:m/s©÷ /f:0.0001
+
+[GyroSf]
+ID=508h
+DLC=8
+Var=GyroSf1 signed 0,16 /u:ppm
+Var=GyroSf2 signed 16,16 /u:ppm
+Var=GyroSf3 signed 32,16 /u:ppm
+
+[GyroBiasStdev]
+ID=509h
+DLC=8
+Var=GyroBias1Stdev unsigned 0,16 /u:¡Æ/s /f:5.729577951E-005
+Var=GyroBias2Stdev unsigned 16,16 /u:¡Æ/s /f:5.729577951E-005
+Var=GyroBias3Stdev unsigned 32,16 /u:¡Æ/s /f:5.729577951E-005
+
+[AccelBiasStdev]
+ID=50Ah
+DLC=8
+Var=AccelBias1Stdev unsigned 0,16 /u:m/s©÷ /f:1E-005 /max:0.65535
+Var=AccelBias2Stdev unsigned 16,16 /u:m/s©÷ /f:1E-005 /max:0.65535
+Var=AccelBias3Stdev unsigned 32,16 /u:m/s©÷ /f:1E-005 /max:0.65535
+
+[GyroSfStdev]
+ID=50Bh
+DLC=8
+Var=GyroSf1Stdev unsigned 0,16 /u:ppm
+Var=GyroSf2Stdev unsigned 16,16 /u:ppm
+Var=GyroSf3Stdev unsigned 32,16 /u:ppm
+
+[GpsAntOffset]
+ID=50Ch
+DLC=8
+Var=GpsAntX signed 0,16 /u:m /f:0.001
+Var=GpsAntY signed 16,16 /u:m /f:0.001
+Var=GpsAntZ signed 32,16 /u:m /f:0.001
+
+[GpsAntAngles]
+ID=50Dh
+DLC=8
+Var=GpsAntHeading signed 0,16 /u:¡Æ /f:0.005729578 /min:-187.7468103084 /max:187.741080735
+Var=GpsAntPitch signed 16,16 /u:¡Æ /f:0.005729578 /min:-187.7468103084 /max:187.741080735
+
+[GPSAntStdev]
+ID=50Eh
+DLC=8
+Var=GpsAntXStdev unsigned 0,16 /u:m /f:0.0001 /max:6.5535
+Var=GpsAntYStdev unsigned 16,16 /u:m /f:0.0001 /max:6.5535
+Var=GpsAntZStdev unsigned 32,16 /u:m /f:0.0001 /max:6.5535
+
+[GPSAntAngleStdev]
+ID=50Fh
+DLC=8
+Var=GpsAntHeadingStdev unsigned 0,16 /u:¡Æ /f:0.0005729577951
+Var=GpsAntPitchStdev unsigned 16,16 /u:¡Æ /f:0.0005729577951
+
+[GpsDiffAge]
+ID=514h
+DLC=8
+Var=GpsDiffAge unsigned 0,16 /u:s /f:0.01
+
+[TrigInDown]
+ID=518h
+DLC=8
+Var=TrigInDown_CoarseGPSTime unsigned 0,32 /u:minute
+Var=TrigInDown_GPSTime unsigned 32,16 /u:s /f:0.001
+Var=TrigInDown_FineGPSTime signed 48,8 /u:ms /f:0.004
+Var=TrigInDown_TriggerCount unsigned 56,8
+
+[HeadingLock]
+ID=52Ah
+DLC=8
+Var=HeadingLockDelay unsigned 0,8 /u:s
+Var=HeadingLockPeriod unsigned 8,8 /u:s /f:0.1
+Var=HeadingLockAngleStdev unsigned 16,16 /u:¡Æ /f:0.0005729577951
+Var=StationaryDelay unsigned 32,8 /u:s
+Var=StationarySpeed unsigned 40,8 /u:m/s /f:0.01 /max:2.55
+Var=HeadingModeRawInternal bit 48,1
+Var=HeadingModeAttInternal bit 49,1
+Var=HeadingModeAttExternal bit 50,1
+Var=HeadingModeValid bit 55,1
+
+[TrigInUp]
+ID=52Bh
+DLC=8
+Var=TrigInUp_CoarseGPSTime unsigned 0,32 /u:minute
+Var=TrigInUp_GPSTime unsigned 32,16 /u:s /f:0.001
+Var=TrigInUp_FineGPSTime signed 48,8 /u:ms /f:0.004
+Var=TrigUpDown_TriggerCount unsigned 56,8
+
+[WheelSpeedStatus]
+ID=52Dh
+DLC=8
+Var=WSpeedCount unsigned 0,32
+Var=WSpeedGPSTime unsigned 32,16 /u:s /f:0.001
+Var=WSpeedChangeTime unsigned 48,8 /u:s /f:0.1
+
+[UndulationDOP]
+ID=530h
+DLC=8
+Var=Undulation signed 0,16 /u:m /f:0.005
+Var=HDOP unsigned 16,8 /f:0.1
+Var=PDOP unsigned 24,8 /f:0.1
+
+[OmniStarTracking]
+ID=531h
+DLC=8
+Var=OmniSatFreq unsigned 0,16 /u:MHz /f:0.001 /o:1520
+Var=OmniSNR unsigned 16,8 /u:dB /f:0.2
+Var=OmniTrackTime unsigned 24,8 /u:s
+
+[LocalRef1]
+ID=542h
+DLC=8
+Var=RefLat signed 0,32 /u:¡Æ /f:1E-007
+Var=RefLon signed 32,32 /u:¡Æ /f:1E-007
+
+[LocalRef2]
+ID=543h
+DLC=8
+Var=RefAlt signed 0,32 /u:m /f:0.001
+Var=RefHeading signed 32,32 /u:¡Æ /f:1E-007
+
+[DateTime]
+ID=600h
+DLC=8
+Var=TimeYear unsigned 0,8 /u:yr /max:100
+Var=TimeCentury unsigned 8,8 /u:cen /max:100
+Var=TimeMonth unsigned 16,8 /u:mo /min:1 /max:12
+Var=TimeDay unsigned 24,8 /u:day /min:1 /max:31
+Var=TimeHSecond unsigned 32,8 /u:s /f:0.01 /max:1
+Var=TimeSecond unsigned 40,8 /u:s /max:60
+Var=TimeMinute unsigned 48,8 /u:min /max:60
+Var=TimeHour unsigned 56,8 /u:hr /max:24
+
+[LatitudeLongitude]
+ID=601h
+DLC=8
+Var=PosLat signed 0,32 /u:¡Æ /f:1E-007
+Var=PosLon signed 32,32 /u:¡Æ /f:1E-007
+
+[Altitude]
+ID=602h
+DLC=4
+Var=PosAlt signed 0,32 /u:m /f:0.001
+
+[Velocity]
+ID=603h
+DLC=8
+Var=VelNorth signed 0,16 /u:m/s /f:0.01
+Var=VelEast signed 16,16 /u:m/s /f:0.01
+Var=VelDown signed 32,16 /u:m/s /f:0.01
+Var=Speed2D unsigned 48,16 /u:m/s /f:0.01
+
+[VelocityLevel]
+ID=604h
+DLC=4
+Var=VelForward signed 0,16 /u:m/s /f:0.01
+Var=VelLateral signed 16,16 /u:m/s /f:0.01
+
+[AccelVehicle]
+ID=605h
+DLC=6
+Var=AccelX signed 0,16 /u:m/s©÷ /f:0.01
+Var=AccelY signed 16,16 /u:m/s©÷ /f:0.01
+Var=AccelZ signed 32,16 /u:m/s©÷ /f:-0.01 /max:327.67
+
+[AccelLevel]
+ID=606h
+DLC=8
+Var=AccelForward signed 0,16 /u:m/s©÷ /f:0.01
+Var=AccelLateral signed 16,16 /u:m/s©÷ /f:0.01
+Var=AccelDown signed 32,16 /u:m/s©÷ /f:0.01
+Var=AccelSlip signed 48,16 /u:m/s©÷ /f:0.01
+
+[HeadingPitchRoll]
+ID=607h
+DLC=6
+Var=AngleHeading unsigned 0,16 /u:¡Æ /f:0.01
+Var=AnglePitch signed 16,16 /u:¡Æ /f:0.01
+Var=AngleRoll signed 32,16 /u:¡Æ /f:0.01
+
+[RateVehicle]
+ID=608h
+DLC=6
+Var=AngRateX signed 0,16 /u:¡Æ/s /f:0.01
+Var=AngRateY signed 16,16 /u:¡Æ/s /f:0.01
+Var=AngRateZ signed 32,16 /u:¡Æ/s /f:0.01
+
+[RateLevel]
+ID=609h
+DLC=6
+Var=AngRateForward signed 0,16 /u:¡Æ/s /f:0.01
+Var=AngRateLateral signed 16,16 /u:¡Æ/s /f:0.01
+Var=AngRateDown signed 32,16 /u:¡Æ/s /f:0.01
+
+[TrackSlipCurvature]
+ID=60Ah
+DLC=6
+Var=AngleTrack unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlip signed 16,16 /u:¡Æ /f:0.01
+Var=Curvature signed 32,16 /u:1/m /f:0.0001
+
+[Distance]
+ID=60Bh
+DLC=8
+Var=DistanceWithHold unsigned 0,32 /u:m /f:0.001
+Var=Distance unsigned 32,32 /u:m /f:0.001
+
+[PosLocal]
+ID=60Ch
+DLC=8
+Var=PosLocalX signed 0,32 /u:m /f:0.0001
+Var=PosLocalY signed 32,32 /u:m /f:0.0001
+
+[VelYawLocal]
+ID=60Dh
+DLC=8
+Var=VelLocalX signed 0,16 /u:m/s /f:0.01
+Var=VelLocalY signed 16,16 /u:m/s /f:0.01
+Var=AngleLocalYaw signed 32,16 /u:¡Æ /f:0.01
+Var=AngleLocalTrack signed 48,16 /u:¡Æ /f:0.01
+
+[AngAccelVehicle]
+ID=60Eh
+DLC=6
+Var=AngAccelX signed 0,16 /u:¡Æ/s©÷ /f:0.1 /max:3276.7
+Var=AngAccelY signed 16,16 /u:¡Æ/s©÷ /f:0.1 /max:3276.7
+Var=AngAccelZ signed 32,16 /u:¡Æ/s©÷ /f:0.1 /max:3276.7
+
+[AngAccelLevel]
+ID=60Fh
+DLC=6
+Var=AngAccelForward signed 0,16 /u:¡Æ/s©÷ /f:0.1 /max:3276.7
+Var=AngAccelLateral signed 16,16 /u:¡Æ/s©÷ /f:0.1 /max:3276.7
+Var=AngAccelDown signed 32,16 /u:¡Æ/s©÷ /f:0.1 /max:3276.7
+
+[TrackSlipCurvaturePoint1]
+ID=620h
+DLC=8
+Var=AngleTrackPoint1 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint1 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint1 signed 32,16 /u:1/m /f:0.0001
+
+[TrackSlipCurvaturePoint2]
+ID=621h
+DLC=8
+Var=AngleTrackPoint2 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint2 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint2 signed 32,16 /u:1/m /f:0.0001
+
+[TrackSlipCurvaturePoint3]
+ID=622h
+DLC=8
+Var=AngleTrackPoint3 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint3 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint3 signed 32,16 /u:1/m /f:0.0001
+
+[TrackSlipCurvaturePoint4]
+ID=623h
+DLC=8
+Var=AngleTrackPoint4 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint4 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint4 signed 32,16 /u:1/m /f:0.0001
+
+[HeadingPitchRollFromSurf]
+ID=624h
+DLC=6
+Var=AngleHeadingFromSurf unsigned 0,16 /u:¡Æ /f:0.01
+Var=AnglePitchFromSurf signed 16,16 /u:¡Æ /f:0.01
+Var=AngleRollFromSurf signed 32,16 /u:¡Æ /f:0.01
+
+[TrackSlipCurvaturePoint5]
+ID=625h
+DLC=8
+Var=AngleTrackPoint5 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint5 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint5 signed 32,16 /u:1/m /f:0.0001
+
+[TrackSlipCurvaturePoint6]
+ID=626h
+DLC=8
+Var=AngleTrackPoint6 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint6 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint6 signed 32,16 /u:1/m /f:0.0001
+
+[TrackSlipCurvaturePoint7]
+ID=627h
+DLC=8
+Var=AngleTrackPoint7 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint7 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint7 signed 32,16 /u:1/m /f:0.0001
+
+[TrackSlipCurvaturePoint8]
+ID=628h
+DLC=8
+Var=AngleTrackPoint8 unsigned 0,16 /u:¡Æ /f:0.01
+Var=AngleSlipPoint8 signed 16,16 /u:¡Æ /f:0.01
+Var=CurvaturePoint8 signed 32,16 /u:1/m /f:0.0001

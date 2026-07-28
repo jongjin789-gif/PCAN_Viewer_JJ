@@ -1,0 +1,278 @@
+﻿FormatVersion=6.0 // Do not edit this line!
+Title="Untitled"
+
+{ENUMS}
+Enum=FarDrv_Chk_Valid(0="Invalid", 1="Valid")
+Enum=FarDrv_Gear(0="Neutral", 1="Forward", 2="Reverse")
+Enum=FarDrv_Brake(0="No_Brake", 1="Brake")
+Enum=FarDrv_Spd_Gear(0="High_Gear_Only", 1="Gear_1~3")
+Enum=FarDrv_Chk_Activated(0="Not_Activated", 1="Activated")
+Enum=FarDrv_Contactor(0="Disconnect", 1="Closed")
+Enum=FarDrv_Automatic_Ctrl_Md(0="Handlebar_Control", 5="Throttle_Mode", 10="Torque_Mode_Mode", 12="RPM_Mode")
+Enum=DBS_Work_Mode(0="DriveByWire", 1="Exhaust", 2="Pedal", 3="ManualExhaust")
+Enum=DBS_Sys_St(0="Sys_Normal", 1="Sys_Warn", 2="Sys_Err")
+Enum=DBS_Warning(0="Normal", 1="Warning")
+Enum=DBS_ReqACK(0="NoACK", 1="ACK")
+
+{SENDRECEIVE}
+
+[VCU_CTRL_MD_ST]
+ID=130h
+CycleTime=10
+Var=B00_Alive_Counter unsigned 0,4
+Var=B04_ControlUnit unsigned 4,4
+Var=B08_Sync_Remote unsigned 8,1
+Var=B09_Sync_CmdCtrl unsigned 9,1
+Var=B10_Emergency unsigned 10,4
+Var=B14_Control_Mode unsigned 14,2
+Var=B16_DrvMot_Mode unsigned 16,2
+Var=B18_Vehicle_Gear unsigned 18,2
+Var=B20_StrCtrl_Mode unsigned 20,4
+
+[VCU_COMMUNICATION_ST]
+ID=131h
+CycleTime=10
+Var=B00_ECU1_Comm_St unsigned 0,2
+Var=B02_ECU2_Comm_St unsigned 2,2
+Var=B04_ECU3_Comm_St unsigned 4,2
+Var=B06_ECU4_Comm_St unsigned 6,2
+Var=B08_DrvMot1_Comm_St unsigned 8,2
+Var=B10_DrvMot2_Comm_St unsigned 10,2
+Var=B12_DrvMot3_Comm_St unsigned 12,2
+Var=B14_DrvMot4_Comm_St unsigned 14,2
+Var=B16_SteerMot1_Comm_St unsigned 16,2
+Var=B18_SteerMot2_Comm_St unsigned 18,2
+Var=B20_SteerMot3_Comm_St unsigned 20,2
+Var=B22_SteerMot4_Comm_St unsigned 22,2
+Var=B24_EPB1_Comm_St unsigned 24,2
+Var=B26_EPB2_Comm_St unsigned 26,2
+Var=B28_EPB3_Comm_St unsigned 28,2
+Var=B30_EPB4_Comm_St unsigned 30,2
+Var=B32_Brake1_Comm_St unsigned 32,2
+Var=B34_Brake2_Comm_St unsigned 34,2
+Var=B36_Brake3_Comm_St unsigned 36,2
+Var=B38_Brake4_Comm_St unsigned 38,2
+Var=B40_IMU_Comm_St unsigned 40,2
+Var=B42_Battery_Comm_St unsigned 42,2
+
+[VCU_DRV_MOT_ST]
+ID=132h
+CycleTime=10
+Var=B00_DrvMot1_Torque signed 0,16 /u:Nm /f:0.1 /min:0
+Var=B16_DrvMot2_Torque signed 16,16 /u:Nm /f:0.1 /min:0
+Var=B32_DrvMot3_Torque signed 32,16 /u:Nm /f:0.1 /min:0
+Var=B48_DrvMot4_Torque signed 48,16 /u:Nm /f:0.1 /min:0
+
+[VCU_DRV_MOT_ST2]
+ID=133h
+CycleTime=10
+Var=B00_DrvMot1_RPM signed 0,16 /u:RPM /min:0
+Var=B16_DrvMot2_RPM signed 16,16 /u:RPM /min:0
+Var=B32_DrvMot3_RPM signed 32,16 /u:RPM /min:0
+Var=B48_DrvMot4_RPM signed 48,16 /u:RPM /min:0
+
+[VCU_DRV_MOT_ST3]
+ID=134h
+CycleTime=10
+Var=B00_DrvMot1_SPEED signed 0,16 /u:m/s /f:0.01 /min:0
+Var=B16_DrvMot2_SPEED signed 16,16 /u:m/s /f:0.01 /min:0
+Var=B32_DrvMot3_SPEED signed 32,16 /u:m/s /f:0.01 /min:0
+Var=B48_DrvMot4_SPEED signed 48,16 /u:m/s /f:0.01 /min:0
+
+[VCU_STEER_MOT_ST]
+ID=135h
+CycleTime=10
+Var=B00_StrMot1_Deg signed 0,16 /u:Deg /f:0.01 /min:0
+Var=B16_StrMot2_Deg signed 16,16 /u:Deg /f:0.01 /min:0
+Var=B32_StrMot3_Deg signed 32,16 /u:Deg /f:0.01 /min:0
+Var=B48_StrMot4_Deg signed 48,16 /u:Deg /f:0.01 /min:0
+
+[VCU_STEER_MOT_ST2]
+ID=136h
+CycleTime=10
+Var=B00_Str1_Locking_St unsigned 0,1
+Var=B01_Str2_Locking_St unsigned 1,1
+Var=B02_Str3_Locking_St unsigned 2,1
+Var=B03_Str4_Locking_St unsigned 3,1
+
+[VCU_BRAKE_ST]
+ID=137h
+CycleTime=10
+Var=B00_EPB1_Thr_St unsigned 0,2
+Var=B02_EPB2_Thr_St unsigned 2,2
+Var=B04_EPB3_Thr_St unsigned 4,2
+Var=B06_EPB4_Thr_St unsigned 6,2
+Var=B08_Brake1_Wk_Md_St signed 8,2
+Var=B10_Brake2_Wk_Md_St signed 10,2
+Var=B12_Brake3_Wk_Md_St signed 12,2
+Var=B14_Brake4_Wk_Md_St signed 14,2
+Var=B16_Brake1_Thr_St unsigned 16,10 /u:Mpa /f:0.1
+Var=B26_Brake2_Thr_St unsigned 26,10 /u:Mpa /f:0.1
+Var=B36_Brake3_Thr_St unsigned 36,10 /u:Mpa /f:0.1
+Var=B46_Brake4_Thr_St unsigned 46,10 /u:Mpa /f:0.1
+
+[VCU_BAT_ST]
+ID=13Ah
+CycleTime=10
+Var=B00_Bat_SoC unsigned 0,16 /f:0.1
+Var=B16_Bat_Voltage signed 16,16 /f:0.01 /min:-327.67
+Var=B32_Bat_Current signed 32,16 /f:0.1 /min:-3276.7 /max:3276.7
+
+[VCU_IMU_ST1]
+ID=13Bh
+CycleTime=10
+Var=B00_Acc_X_St signed 0,16 /u:m/s^2 /f:0.01 /min:0
+Var=B16_Acc_Y_St signed 16,16 /u:m/s^2 /f:0.01 /min:0
+Var=B32_Acc_Z_St signed 32,16 /u:m/s^2 /f:0.01 /min:0
+
+[VCU_IMU_ST2]
+ID=13Ch
+CycleTime=10
+Var=B00_AngularVel_X_St signed 0,16 /u:°/s /f:0.1 /min:0
+Var=B16_AngularVel_Y_St signed 16,16 /u:°/s /f:0.1 /min:0
+Var=B32_AngularVel_Z_St signed 32,16 /u:°/s /f:0.1 /min:0
+
+[VCU_IMU_ST3]
+ID=13Dh
+CycleTime=10
+Var=B00_Angle_X_St signed 0,16 /u:deg /f:0.01 /min:0
+Var=B16_Angle_Y_St signed 16,16 /u:deg /f:0.01 /min:0
+Var=B32_Angle_Z_St signed 32,16 /u:deg /f:0.01 /min:0
+Var=B48_Temp_St signed 48,16 /u:℃ /f:0.01 /min:0
+
+[DAS_REMOTE_ANALOG]
+ID=1E4h
+CycleTime=60
+Var=B00_AN1 unsigned 0,8 /f:-1 /o:128
+Var=B08_AN2_STEER unsigned 8,8 /f:-1 /o:128
+Var=B16_AN3_ACC_BRK unsigned 16,8 /f:-1 /o:128
+Var=B24_AN4 unsigned 24,8 /f:-1 /o:128
+Var=B32_AN5 unsigned 32,8 /f:-1 /o:128
+Var=B40_AN6 unsigned 40,8 /f:-1 /o:128
+Var=B48_AN7 unsigned 48,8 /f:-1 /o:128
+Var=B56_AN8 unsigned 56,8 /f:-1 /o:128
+
+[DAS_REMOTE_STATUS]
+ID=2E4h
+CycleTime=60
+Var=B00_B00_BTN_STR unsigned 0,1
+Var=B01_B01_ST_START unsigned 1,1
+Var=B02_B02_BTN_L_UP unsigned 2,1
+Var=B03_B03_BTN_L_DN unsigned 3,1
+Var=B05_B05_SYS_STATE unsigned 5,2
+Var=B07_B07_ST_EMS unsigned 7,1
+Var=B24_B24_TOGGLE_STEER_MD unsigned 24,2
+Var=B26_B26_TOGGLE_GEAR unsigned 26,2
+Var=B28_B28_TOGGLE_PARKING unsigned 28,2
+Var=B30_B30_TOGGLE_AUTO_MD unsigned 30,2
+Var=B32_B32_ALIVED_COUNT unsigned 32,4
+Var=B38_B38_REMOTE_SYNC unsigned 38,1
+
+[VCU_CTRL_MD_CMD]
+ID=100h
+CycleTime=20
+Var=B00_Alive_Counter unsigned 0,4
+Var=B04_Request_Cmd_Ctrl_Md unsigned 4,1
+Var=B05_Emergency unsigned 5,1
+Var=B06_Control_Mode unsigned 6,1
+Var=B07_DrvMot_Mode unsigned 7,1
+Var=B08_DrvMot_Gear unsigned 8,2
+Var=B10_StrCtrl_Mode unsigned 10,4
+Var=B14_DrvMot_Speed_Limit unsigned 14,10 /u:m/s /f:0.1
+Var=B24_DrvMot_Throttle unsigned 24,10 /u:% /f:0.1
+Var=B34_DrvMot_Speed unsigned 34,9 /u:m/s /f:0.1
+Var=B43_Str_AngVel_En unsigned 43,1
+Var=B44_Steering_Angle signed 44,10 /f:0.06
+Var=B54_Brake_Pressure unsigned 54,10 /u:% /f:0.1
+
+[VCU_DRV_MOT1_CMD]
+ID=102h
+CycleTime=20
+Var=B00_DrvMot1_Mode unsigned 0,2
+Var=B02_DrvMot1_Gear unsigned 2,2
+Var=B04_DrvMot1_Speed_Limit unsigned 4,8 /u:m/s /f:0.1
+Var=B12_DrvMot1_Ctrl_Spd_Data unsigned 12,8 /u:m/s /f:0.1
+Var=B20_DrvMot1_Ctrl_Thr_Data unsigned 20,12 /u:% /f:0.1
+Var=B32_DrvMot2_Mode unsigned 32,2
+Var=B34_DrvMot2_Gear unsigned 34,2
+Var=B36_DrvMot2_Speed_Limit unsigned 36,8 /u:m/s /f:0.1
+Var=B44_DrvMot2_Ctrl_Spd_Data unsigned 44,8 /u:m/s /f:0.1
+Var=B52_DrvMot2_Ctrl_Thr_Data unsigned 52,12 /u:% /f:0.1
+
+[VCU_DRV_MOT2_CMD]
+ID=103h
+CycleTime=20
+Var=B00_DrvMot3_Mode unsigned 0,2
+Var=B02_DrvMot3_Gear unsigned 2,2
+Var=B04_DrvMot3_Speed_Limit unsigned 4,8 /u:m/s /f:0.1
+Var=B12_DrvMot3_Ctrl_Spd_Data unsigned 12,8 /u:m/s /f:0.1
+Var=B20_DrvMot3_Ctrl_Thr_Data unsigned 20,12 /u:% /f:0.1
+Var=B32_DrvMot4_Mode unsigned 32,2
+Var=B34_DrvMot4_Gear unsigned 34,2
+Var=B36_DrvMot4_Speed_Limit unsigned 36,8 /u:m/s /f:0.1
+Var=B44_DrvMot4_Ctrl_Spd_Data unsigned 44,8 /u:m/s /f:0.1
+Var=B52_DrvMot4_Ctrl_Thr_Data unsigned 52,12 /u:% /f:0.1
+
+[VCU_STEER_FL_CMD]
+ID=105h
+CycleTime=20
+Var=B00_Str_FL_Locking unsigned 0,1
+Var=B01_Str_FL_AngVel_En unsigned 1,1
+Var=B08_Str_FL_Deg_Cmd signed 8,16 /f:0.01 /min:0
+Var=B24_Str_FL_Ang_Vel_Cmd unsigned 24,10
+Var=B34_Str_FL_Ang_Acc_Cmd unsigned 34,10
+Var=B44_Str_FL_Ang_Dec_Cmd unsigned 44,10
+
+[VCU_STEER_FR_CMD]
+ID=106h
+CycleTime=20
+Var=B00_Str_FR_Locking unsigned 0,1
+Var=B01_Str_FR_AngVel_En unsigned 1,1
+Var=B08_Str_FR_Deg_Cmd signed 8,16 /f:0.01 /min:0
+Var=B24_Str_FR_Ang_Vel_Cmd unsigned 24,10
+Var=B34_Str_FR_Ang_Acc_Cmd unsigned 34,10
+Var=B44_Str_FR_Ang_Dec_Cmd unsigned 44,10
+
+[VCU_STEER_RL_CMD]
+ID=107h
+CycleTime=20
+Var=B00_Str_RL_Locking unsigned 0,1
+Var=B01_Str_RL_AngVel_En unsigned 1,1
+Var=B08_Str_RL_Deg_Cmd signed 8,16 /f:0.01 /min:0
+Var=B24_Str_RL_Ang_Vel_Cmd unsigned 24,10
+Var=B34_Str_RL_Ang_Acc_Cmd unsigned 34,10
+Var=B44_Str_RL_Ang_Dec_Cmd unsigned 44,10
+
+[VCU_STEER_RR_CMD]
+ID=108h
+CycleTime=20
+Var=B00_Str_RR_Locking unsigned 0,1
+Var=B01_Str_RR_AngVel_En unsigned 1,1
+Var=B08_Str_RR_Deg_Cmd signed 8,16 /f:0.01 /min:0
+Var=B24_Str_RR_Ang_Vel_Cmd unsigned 24,10
+Var=B34_Str_RR_Ang_Acc_Cmd unsigned 34,10
+Var=B44_Str_RR_Ang_Dec_Cmd unsigned 44,10
+
+[VCU_EPB_CMD]
+ID=10Ah
+CycleTime=20
+Var=B00_EPB1_Parking unsigned 0,8
+Var=B08_EPB1_Clamping_Force unsigned 8,8 /u:N /f:100
+Var=B16_EPB2_Parking unsigned 16,8
+Var=B24_EPB2_Clamping_Force unsigned 24,8 /u:N /f:100
+Var=B32_EPB3_Parking unsigned 32,8
+Var=B40_EPB3_Clamping_Force unsigned 40,8 /u:N /f:100
+Var=B48_EPB4_Parking unsigned 48,8
+Var=B56_EPB4_Clamping_Force unsigned 56,8 /u:N /f:100
+
+[VCU_BRAKE_CMD]
+ID=10Bh
+CycleTime=20
+Var=B00_Brake1_Work_Mode unsigned 0,4
+Var=B04_Brake1_Pressure unsigned 4,12 /u:% /f:0.1
+Var=B16_Brake2_Work_Mode unsigned 16,4
+Var=B20_Brake2_Pressure unsigned 20,12 /u:% /f:0.1
+Var=B32_Brake3_Work_Mode unsigned 32,4
+Var=B36_Brake3_Pressure unsigned 36,12 /u:% /f:0.1
+Var=B48_Brake4_Work_Mode unsigned 48,4
+Var=B52_Brake4_Pressure unsigned 52,12 /u:% /f:0.1

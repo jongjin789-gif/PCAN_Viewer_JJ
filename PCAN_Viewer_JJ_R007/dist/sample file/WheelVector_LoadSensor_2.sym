@@ -1,0 +1,56 @@
+FormatVersion=5.0 // Do not edit this line!
+Title="RV-4 Sensor_060-19002_2"
+
+{SENDRECEIVE}
+
+[RV4_WPTdata]
+ID=7FEh
+DLC=4
+Var=Vel_S2 unsigned 16,16 /u:km/h /f:0.036 /max:400
+Var=Vel_S1 unsigned 0,16 /u:km/h /f:0.036 /max:400
+
+[RV4_Sensor2_Data2]
+ID=7FDh
+DLC=8
+Var=Dist_S2 unsigned 32,32 /u:m /f:0.001
+Var=WheelSteer_S2 signed 16,16 /f:0.01 /min:-60 /max:60
+
+[RV4_Sensor2_Data1]
+ID=7FCh
+DLC=8
+Var=PosZ_S2 signed 48,16 /u:mm /f:0.01 /min:-300 /max:300
+Var=PosY_S2 signed 32,16 /u:mm /f:0.01 /min:-300 /max:300
+Var=PosX_S2 signed 16,16 /u:mm /f:0.01 /min:-300 /max:300
+Var=TotalToe signed 0,16 /u:"? RV4_BO_204" /f:0.01 /min:-60 /max:60
+Var=Camber_S1 signed 0,16 /u:"? RV4_BO_204" /f:0.01 /min:-60 /max:60
+
+[RV4_Sensor1_Data2]
+ID=7FBh
+DLC=8
+Var=Dist_S1 unsigned 32,32 /u:m /f:0.001
+Var=WheelSteer_S1 signed 16,16 /f:-0.01 /o:1.8 /min:-60 /max:60
+
+[RV4_Sensor1_Data1]
+ID=7FAh
+DLC=8
+Var=PosZ_S1 signed 48,16 /u:mm /f:0.01 /min:-300 /max:300
+Var=PosY_S1 signed 32,16 /u:mm /f:0.01 /min:-300 /max:300
+Var=PosX_S1 signed 16,16 /u:mm /f:0.01 /min:-300 /max:300
+Var=TotalToe signed 0,16 /u:"? RV4_BO_204" /f:0.01 /min:-60 /max:60
+Var=Camber_S1 signed 0,16 /u:"? RV4_BO_204" /f:0.01 /min:-60 /max:60
+
+[STGMM_26448_MSG0]
+ID=600h
+DLC=6
+CycleTime=1
+Var=Load_FL signed 0,16 /u:kN /f:0.00100712495 /o:0.34 /min:-32.5514703616 /max:32.9934
+Var=Load_FR signed 16,16 /u:kN /f:0.00100712495 /o:0.3 /max:32.35046323665
+Var=Load_RL signed 32,16 /u:kN /f:-0.00100732601 /o:-0.5 /min:-32.59805869568 /max:31.50805869568
+
+[STGMM_26448_MSG1]
+ID=601h
+DLC=6
+CycleTime=1
+Var=Load_RR signed 0,16 /u:kN /f:0.00100732601 /o:-0.15 /min:-33 /max:32.81705136967
+Var=STGMM_26448_A05 signed 16,16 /u:mV/V /f:0.000610500611 /min:-20 /max:20
+Var=STGMM_26448_A06 signed 32,16 /u:mV/V /f:0.000610500611 /min:-20 /max:20

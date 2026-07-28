@@ -1,0 +1,32 @@
+{
+    "viewer_mode_only": false,
+    "tx_packets": [],
+    "db_files": {
+        "1": [],
+        "2": [],
+        "3": []
+    },
+    "can_config": {
+        "1": {
+            "channel": "No available CAN channels found",
+            "bitrate": "500 kBit/s",
+            "fd_iso": "ISO",
+            "data_bitrate": "N/A",
+            "is_open": false
+        },
+        "2": {
+            "channel": "No available CAN channels found",
+            "bitrate": "500 kBit/s",
+            "fd_iso": "ISO",
+            "data_bitrate": "N/A",
+            "is_open": false
+        },
+        "3": {
+            "channel": "No available CAN channels found",
+            "bitrate": "500 kBit/s",
+            "fd_iso": "ISO",
+            "data_bitrate": "N/A",
+            "is_open": false
+        }
+    }
+}
