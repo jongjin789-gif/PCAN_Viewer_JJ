@@ -577,6 +577,8 @@ class UniversalCANMonitor(QMainWindow):
              QMessageBox.warning(self, "Warning", f"Please select a valid CAN channel for Bus {bus_num}.")
              return
 
+        bustype = channel_data.get('bustype', 'pcan')
+
         if platform.system() == 'Linux' and bustype == 'socketcan':
             self.open_linux_socketcan(bus_num)
         else:
