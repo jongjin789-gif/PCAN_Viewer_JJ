@@ -20,7 +20,7 @@
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
             "data_bitrate": "Off",
-            "is_open": true
+            "is_open": false
         },
         "2": {
             "channel": "PCAN-USB Pro FD (0x51) [FD]",
