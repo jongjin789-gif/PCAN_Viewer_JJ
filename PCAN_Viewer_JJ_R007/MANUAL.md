@@ -18,6 +18,10 @@
 5. [로그 기록 및 뷰어](#5-로그-기록-및-뷰어)
    - [데이터 기록](#데이터-기록-record)
    - [로그 뷰어](#로그-뷰어-log-viewer)
+6. [사용자 패널 (User Panel)](#6-사용자-패널-user-panel)
+    - [기본 개념](#기본-개념)
+    - [위젯별 입력 의미](#위젯별-입력-의미)
+    - [라이브 프리뷰](#라이브-프리뷰)
 
 ---
 
@@ -138,3 +142,63 @@
         -   **전송** 버튼: 로그 파일의 내용을 기록된 시간 간격 그대로 CAN 버스로 다시 전송(Replay)합니다.
         -   **선택 전송** (또는 스페이스바): 표에서 선택한 한 줄의 데이터만 1회 전송합니다.
         -   **반복** 체크박스: 전체 로그 전송이 끝나면 처음부터 다시 반복합니다.
+
+---
+
+## 6. 사용자 패널 (User Panel)
+
+Tx Panel 툴바의 **User Panel** 버튼으로 여는 사용자 정의 조작/표시 화면입니다.
+
+### 제어 모드
+- **EDIT**: 도구 생성/삭제/배치/설정 변경 모드
+- **STANDBY**: TX 차단, RX 표시 위젯 갱신 모드
+- **RUN**: TX/RX 모두 동작
+- 편집 보안이 활성화된 경우(STANDBY/RUN -> EDIT 복귀 시) 비밀번호 입력이 필요합니다.
+
+### 도구 생성
+- **Add TX Tool**: 송신 위젯 생성
+- **Add RX Tool**: 수신 위젯 생성
+- **Add Group/Shape**: 그룹/탭/도형 도구 생성
+- 도형 빠른 생성: **Draw Rect / Draw Line**
+
+### TX 동작
+- **button**: 누르는 동안 `Button Push Value` 반복 송신, 뗄 때 `Button Pull Value` 1회 송신
+- **toggle**: ON/OFF에 따라 `Toggle ON/OFF Value` 송신
+- **slider/spinbox**: `Min/Max/Resolution` 기반 값 송신
+- **TX Cycle Mode**:
+  - `immediate`: 입력 즉시 송신
+  - `fixed`: 사용자 고정 주기 송신
+  - `dbc`: DBC 주기 우선(없으면 고정 주기 사용)
+  - `fastest`: DBC/고정 중 더 빠른 주기 사용
+
+### RX 동작
+- **progress / label / status_lamp** 위젯 지원
+- **status_lamp**: ON/OFF 조건을 독립 설정
+- 조건 연산자: `gt`, `ge`, `lt`, `le`, `eq`, `ne`, `between`, `outside`
+
+### CAN 없는 환경 테스트 (RX Simulator)
+- **Apply Selected RX**: 선택 RX 도구에 수동 값 주입
+- **Apply All RX**: 모든 RX 도구에 동일 값 주입
+- **Auto Sim**: STANDBY/RUN 모드에서 자동 파형 값 주입
+
+### 배치/그룹 편집
+- **Tool List**에서 선택/우클릭(Edit/Delete/Z-order)
+- **Bring Front / Send Back / Forward / Backward**: 전후 배치 순서 변경
+- 도구 프레임 드래그로 이동, 우하단 드래그로 크기(span) 변경
+- **Selected Tool Geometry**: `row/col/row_span/col_span` 수치 직접 입력
+- 그룹/탭 위로 드롭하면 자동으로 해당 부모에 편입
+
+### 충돌 점검
+- **Check TX Overlap**: 동일 CAN 프레임의 비트 오버랩 점검
+- 오버랩 도구는 Tool List에서 빨간색으로 표시
+- **Focus Conflict** 또는 항목 더블클릭으로 충돌 도구 간 이동
+
+### 저장/불러오기
+- 패널 설정 저장: `*.upp.json`
+- 패널 패키지 저장: `*.pjjupkg`
+  - 패널 도구 설정 + Bus별 DB 파일(dbc/sym) 묶음 저장
+  - 패키지 로드 시 기존 DB 목록을 교체 후 패널 복원
+
+### 제한사항
+- fallback 비트 인코딩 경로는 little-endian만 지원
+- big-endian fallback 인코딩은 추후 확장 대상
