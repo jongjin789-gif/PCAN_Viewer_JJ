@@ -4,8 +4,9 @@ import math
 import time
 import uuid
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen
 from PyQt5.QtWidgets import (
+    QAction,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -17,9 +18,11 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QMenuBar,
     QPushButton,
     QDoubleSpinBox,
     QProgressBar,
+    QShortcut,
     QSpinBox,
     QSlider,
     QSplitter,
@@ -31,6 +34,43 @@ from PyQt5.QtWidgets import (
 from .config_dialog import WidgetConfigDialog
 from .mode_security import verify_edit_password
 from .storage import PACKAGE_EXT, load_bundle, load_panel_json, save_bundle, save_panel_json
+
+
+class GridCanvas(QWidget):
+    def __init__(self, owner, parent=None):
+        super().__init__(parent)
+        self.owner = owner
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        rows = max(1, int(getattr(self.owner, "grid_rows", 12)))
+        cols = max(1, int(getattr(self.owner, "grid_cols", 12)))
+        w = max(1, self.width())
+        h = max(1, self.height())
+        cell_w = w / float(cols)
+        cell_h = h / float(rows)
+
+        p = QPainter(self)
+        c0 = QColor("#FAFBFC")
+        c1 = QColor("#F0F4F8")
+
+        for r in range(rows):
+            for c in range(cols):
+                x = int(round(c * cell_w))
+                y = int(round(r * cell_h))
+                x2 = int(round((c + 1) * cell_w))
+                y2 = int(round((r + 1) * cell_h))
+                p.fillRect(x, y, max(1, x2 - x), max(1, y2 - y), c0 if ((r + c) % 2 == 0) else c1)
+
+        p.setPen(QPen(QColor("#D6DCE3"), 1))
+        for r in range(rows + 1):
+            y = int(round(r * cell_h))
+            p.drawLine(0, y, w, y)
+        for c in range(cols + 1):
+            x = int(round(c * cell_w))
+            p.drawLine(x, 0, x, h)
+
+        p.end()
 
 
 class UserPanelWindow(QWidget):
@@ -82,8 +122,10 @@ class UserPanelWindow(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
+        self.setFocusPolicy(Qt.StrongFocus)
 
-        top = QHBoxLayout()
+        self.menu_bar = QMenuBar(self)
+        root.addWidget(self.menu_bar)
 
         self.btn_mode_edit = QPushButton("Mode: EDIT")
         self.btn_mode_standby = QPushButton("Mode: STANDBY")
@@ -98,100 +140,47 @@ class UserPanelWindow(QWidget):
         self.btn_edit = QPushButton("Edit")
         self.btn_delete = QPushButton("Delete")
 
-        self.btn_front = QPushButton("Bring Front")
-        self.btn_back = QPushButton("Send Back")
-        self.btn_forward = QPushButton("Forward")
-        self.btn_backward = QPushButton("Backward")
-        self.btn_nudge_up = QPushButton("Up")
-        self.btn_nudge_down = QPushButton("Down")
-        self.btn_nudge_left = QPushButton("Left")
-        self.btn_nudge_right = QPushButton("Right")
-        self.btn_w_plus = QPushButton("W+")
-        self.btn_w_minus = QPushButton("W-")
-        self.btn_h_plus = QPushButton("H+")
-        self.btn_h_minus = QPushButton("H-")
-        self.btn_check_overlap = QPushButton("Check TX Overlap")
-        self.btn_focus_conflict = QPushButton("Focus Conflict")
-
-        self.btn_save = QPushButton("Save Panel")
-        self.btn_load = QPushButton("Load Panel")
-        self.btn_save_pkg = QPushButton("Save Package")
-        self.btn_load_pkg = QPushButton("Load Package")
-        self.btn_draw_rect = QPushButton("Draw Rect")
-        self.btn_draw_line = QPushButton("Draw Line")
-        self.btn_draw_cancel = QPushButton("Cancel Draw")
-
         self.btn_add_tx.clicked.connect(lambda: self.add_widget("tx"))
         self.btn_add_rx.clicked.connect(lambda: self.add_widget("rx"))
         self.btn_add_misc.clicked.connect(lambda: self.add_widget("none"))
         self.btn_edit.clicked.connect(self.edit_selected_widget)
         self.btn_delete.clicked.connect(self.delete_selected_widget)
 
-        self.btn_front.clicked.connect(self.bring_to_front)
-        self.btn_back.clicked.connect(self.send_to_back)
-        self.btn_forward.clicked.connect(self.move_forward)
-        self.btn_backward.clicked.connect(self.move_backward)
-        self.btn_nudge_up.clicked.connect(lambda: self.nudge_selected(0, -1))
-        self.btn_nudge_down.clicked.connect(lambda: self.nudge_selected(0, 1))
-        self.btn_nudge_left.clicked.connect(lambda: self.nudge_selected(-1, 0))
-        self.btn_nudge_right.clicked.connect(lambda: self.nudge_selected(1, 0))
-        self.btn_w_plus.clicked.connect(lambda: self.resize_selected_span(1, 0))
-        self.btn_w_minus.clicked.connect(lambda: self.resize_selected_span(-1, 0))
-        self.btn_h_plus.clicked.connect(lambda: self.resize_selected_span(0, 1))
-        self.btn_h_minus.clicked.connect(lambda: self.resize_selected_span(0, -1))
-        self.btn_check_overlap.clicked.connect(self.check_tx_overlap)
-        self.btn_focus_conflict.clicked.connect(self.focus_next_conflict)
+        controls = QHBoxLayout()
+        controls.addWidget(self.btn_mode_edit)
+        controls.addWidget(self.btn_mode_standby)
+        controls.addWidget(self.btn_mode_run)
+        controls.addSpacing(12)
+        controls.addWidget(self.btn_add_tx)
+        controls.addWidget(self.btn_add_rx)
+        controls.addWidget(self.btn_add_misc)
+        controls.addWidget(self.btn_edit)
+        controls.addWidget(self.btn_delete)
+        controls.addStretch()
+        root.addLayout(controls)
 
-        self.btn_save.clicked.connect(self.save_panel_to_file)
-        self.btn_load.clicked.connect(self.load_panel_from_file)
-        self.btn_save_pkg.clicked.connect(self.save_package)
-        self.btn_load_pkg.clicked.connect(self.load_package)
-        self.btn_draw_rect.clicked.connect(lambda: self._start_draw_mode("shape_rect"))
-        self.btn_draw_line.clicked.connect(lambda: self._start_draw_mode("shape_line"))
-        self.btn_draw_cancel.clicked.connect(self._cancel_draw_mode)
-
-        top.addWidget(self.btn_mode_edit)
-        top.addWidget(self.btn_mode_standby)
-        top.addWidget(self.btn_mode_run)
-        top.addWidget(self.btn_add_tx)
-        top.addWidget(self.btn_add_rx)
-        top.addWidget(self.btn_add_misc)
-        top.addWidget(self.btn_edit)
-        top.addWidget(self.btn_delete)
-        top.addWidget(self.btn_front)
-        top.addWidget(self.btn_back)
-        top.addWidget(self.btn_forward)
-        top.addWidget(self.btn_backward)
-        top.addWidget(self.btn_nudge_up)
-        top.addWidget(self.btn_nudge_down)
-        top.addWidget(self.btn_nudge_left)
-        top.addWidget(self.btn_nudge_right)
-        top.addWidget(self.btn_w_plus)
-        top.addWidget(self.btn_w_minus)
-        top.addWidget(self.btn_h_plus)
-        top.addWidget(self.btn_h_minus)
-        top.addWidget(self.btn_check_overlap)
-        top.addWidget(self.btn_focus_conflict)
-        top.addWidget(self.btn_draw_rect)
-        top.addWidget(self.btn_draw_line)
-        top.addWidget(self.btn_draw_cancel)
-        top.addStretch()
-        top.addWidget(self.btn_save)
-        top.addWidget(self.btn_load)
-        top.addWidget(self.btn_save_pkg)
-        top.addWidget(self.btn_load_pkg)
-        root.addLayout(top)
+        self._setup_menu_actions()
+        self._setup_shortcuts()
 
         self.label_mode = QLabel()
         root.addWidget(self.label_mode)
 
+        self.label_key_help = QLabel(
+            "Move: Arrow keys | Resize span: Shift+Arrow | Delete: Del | Drag move/resize is supported in EDIT"
+        )
+        self.label_key_help.setStyleSheet("color:#555;")
+        root.addWidget(self.label_key_help)
+
         split = QSplitter(Qt.Horizontal)
 
         left = QWidget()
+        left.setMinimumWidth(180)
+        left.setMaximumWidth(340)
         left_lay = QVBoxLayout(left)
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.addWidget(QLabel("Tool List"))
         self.list_tools = QListWidget()
+        self.list_tools.setMinimumWidth(170)
         self.list_tools.currentItemChanged.connect(self._on_tool_list_selection_changed)
         self.list_tools.itemDoubleClicked.connect(self._on_tool_list_double_clicked)
         self.list_tools.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -250,7 +239,7 @@ class UserPanelWindow(QWidget):
         right_lay = QVBoxLayout(right)
         right_lay.setContentsMargins(0, 0, 0, 0)
 
-        self.canvas = QWidget()
+        self.canvas = GridCanvas(self)
         self.canvas_layout = QGridLayout(self.canvas)
         self.canvas_layout.setContentsMargins(6, 6, 6, 6)
         self.canvas_layout.setHorizontalSpacing(6)
@@ -266,11 +255,127 @@ class UserPanelWindow(QWidget):
 
         split.addWidget(left)
         split.addWidget(right)
-        split.setSizes([260, 900])
+        split.setSizes([210, 970])
 
         root.addWidget(split, 1)
 
         self._sync_geom_editor_from_selection()
+
+    def _setup_menu_actions(self):
+        menu_file = self.menu_bar.addMenu("File")
+        menu_draw = self.menu_bar.addMenu("Draw")
+        menu_arrange = self.menu_bar.addMenu("Arrange")
+        menu_tools = self.menu_bar.addMenu("Tools")
+        menu_diag = self.menu_bar.addMenu("Diagnostics")
+        menu_sim = self.menu_bar.addMenu("RX Simulator")
+
+        self.act_save_panel = QAction("Save Panel", self)
+        self.act_load_panel = QAction("Load Panel", self)
+        self.act_save_pkg = QAction("Save Package", self)
+        self.act_load_pkg = QAction("Load Package", self)
+        self.act_save_panel.triggered.connect(self.save_panel_to_file)
+        self.act_load_panel.triggered.connect(self.load_panel_from_file)
+        self.act_save_pkg.triggered.connect(self.save_package)
+        self.act_load_pkg.triggered.connect(self.load_package)
+        menu_file.addAction(self.act_save_panel)
+        menu_file.addAction(self.act_load_panel)
+        menu_file.addSeparator()
+        menu_file.addAction(self.act_save_pkg)
+        menu_file.addAction(self.act_load_pkg)
+
+        self.act_draw_rect = QAction("Draw Rect", self)
+        self.act_draw_line = QAction("Draw Line", self)
+        self.act_draw_cancel = QAction("Cancel Draw", self)
+        self.act_draw_rect.triggered.connect(lambda: self._start_draw_mode("shape_rect"))
+        self.act_draw_line.triggered.connect(lambda: self._start_draw_mode("shape_line"))
+        self.act_draw_cancel.triggered.connect(self._cancel_draw_mode)
+        menu_draw.addAction(self.act_draw_rect)
+        menu_draw.addAction(self.act_draw_line)
+        menu_draw.addAction(self.act_draw_cancel)
+
+        self.act_front = QAction("Bring Front", self)
+        self.act_back = QAction("Send Back", self)
+        self.act_forward = QAction("Forward", self)
+        self.act_backward = QAction("Backward", self)
+        self.act_front.triggered.connect(self.bring_to_front)
+        self.act_back.triggered.connect(self.send_to_back)
+        self.act_forward.triggered.connect(self.move_forward)
+        self.act_backward.triggered.connect(self.move_backward)
+        menu_arrange.addAction(self.act_front)
+        menu_arrange.addAction(self.act_back)
+        menu_arrange.addAction(self.act_forward)
+        menu_arrange.addAction(self.act_backward)
+
+        self.act_resize_w_plus = QAction("Width +1", self)
+        self.act_resize_w_minus = QAction("Width -1", self)
+        self.act_resize_h_plus = QAction("Height +1", self)
+        self.act_resize_h_minus = QAction("Height -1", self)
+        self.act_resize_w_plus.triggered.connect(lambda: self.resize_selected_span(1, 0))
+        self.act_resize_w_minus.triggered.connect(lambda: self.resize_selected_span(-1, 0))
+        self.act_resize_h_plus.triggered.connect(lambda: self.resize_selected_span(0, 1))
+        self.act_resize_h_minus.triggered.connect(lambda: self.resize_selected_span(0, -1))
+        menu_tools.addAction(self.act_resize_w_plus)
+        menu_tools.addAction(self.act_resize_w_minus)
+        menu_tools.addAction(self.act_resize_h_plus)
+        menu_tools.addAction(self.act_resize_h_minus)
+
+        self.act_check_overlap = QAction("Check TX Overlap", self)
+        self.act_focus_conflict = QAction("Focus Conflict", self)
+        self.act_check_overlap.triggered.connect(self.check_tx_overlap)
+        self.act_focus_conflict.triggered.connect(self.focus_next_conflict)
+        menu_diag.addAction(self.act_check_overlap)
+        menu_diag.addAction(self.act_focus_conflict)
+
+        self.act_sim_selected = QAction("Apply Selected RX", self)
+        self.act_sim_all = QAction("Apply All RX", self)
+        self.act_sim_auto = QAction("Auto Sim", self)
+        self.act_sim_auto.setCheckable(True)
+        self.act_sim_selected.triggered.connect(self.simulate_selected_rx)
+        self.act_sim_all.triggered.connect(self.simulate_all_rx)
+        self.act_sim_auto.toggled.connect(self._toggle_auto_sim)
+        menu_sim.addAction(self.act_sim_selected)
+        menu_sim.addAction(self.act_sim_all)
+        menu_sim.addAction(self.act_sim_auto)
+
+        self._edit_mode_actions = [
+            self.btn_add_tx,
+            self.btn_add_rx,
+            self.btn_add_misc,
+            self.btn_edit,
+            self.btn_delete,
+            self.act_draw_rect,
+            self.act_draw_line,
+            self.act_draw_cancel,
+            self.act_front,
+            self.act_back,
+            self.act_forward,
+            self.act_backward,
+            self.act_resize_w_plus,
+            self.act_resize_w_minus,
+            self.act_resize_h_plus,
+            self.act_resize_h_minus,
+            self.act_check_overlap,
+            self.act_focus_conflict,
+        ]
+
+    def _setup_shortcuts(self):
+        self._shortcuts = []
+
+        def _add_shortcut(keyseq, callback):
+            sc = QShortcut(QKeySequence(keyseq), self)
+            sc.setContext(Qt.WidgetWithChildrenShortcut)
+            sc.activated.connect(callback)
+            self._shortcuts.append(sc)
+
+        _add_shortcut(Qt.Key_Up, lambda: self.nudge_selected(0, -1))
+        _add_shortcut(Qt.Key_Down, lambda: self.nudge_selected(0, 1))
+        _add_shortcut(Qt.Key_Left, lambda: self.nudge_selected(-1, 0))
+        _add_shortcut(Qt.Key_Right, lambda: self.nudge_selected(1, 0))
+        _add_shortcut("Shift+Up", lambda: self.resize_selected_span(0, -1))
+        _add_shortcut("Shift+Down", lambda: self.resize_selected_span(0, 1))
+        _add_shortcut("Shift+Left", lambda: self.resize_selected_span(-1, 0))
+        _add_shortcut("Shift+Right", lambda: self.resize_selected_span(1, 0))
+        _add_shortcut(Qt.Key_Delete, self.delete_selected_widget)
 
     def set_mode(self, new_mode):
         if new_mode == self.mode:
@@ -302,32 +407,19 @@ class UserPanelWindow(QWidget):
             self.btn_sim_auto.setChecked(False)
             self.btn_sim_auto.setText("Auto Sim: OFF")
             self.btn_sim_auto.blockSignals(False)
+            self.act_sim_auto.blockSignals(True)
+            self.act_sim_auto.setChecked(False)
+            self.act_sim_auto.blockSignals(False)
 
-        self.btn_add_tx.setEnabled(is_edit)
-        self.btn_add_rx.setEnabled(is_edit)
-        self.btn_add_misc.setEnabled(is_edit)
-        self.btn_edit.setEnabled(is_edit)
-        self.btn_delete.setEnabled(is_edit)
-        self.btn_front.setEnabled(is_edit)
-        self.btn_back.setEnabled(is_edit)
-        self.btn_forward.setEnabled(is_edit)
-        self.btn_backward.setEnabled(is_edit)
-        self.btn_nudge_up.setEnabled(is_edit)
-        self.btn_nudge_down.setEnabled(is_edit)
-        self.btn_nudge_left.setEnabled(is_edit)
-        self.btn_nudge_right.setEnabled(is_edit)
-        self.btn_w_plus.setEnabled(is_edit)
-        self.btn_w_minus.setEnabled(is_edit)
-        self.btn_h_plus.setEnabled(is_edit)
-        self.btn_h_minus.setEnabled(is_edit)
-        self.btn_check_overlap.setEnabled(is_edit)
-        self.btn_focus_conflict.setEnabled(is_edit)
-        self.btn_draw_rect.setEnabled(is_edit)
-        self.btn_draw_line.setEnabled(is_edit)
-        self.btn_draw_cancel.setEnabled(is_edit)
+        for item in getattr(self, "_edit_mode_actions", []):
+            item.setEnabled(is_edit)
+
+        self.act_sim_auto.blockSignals(True)
+        self.act_sim_auto.setChecked(self.btn_sim_auto.isChecked())
+        self.act_sim_auto.blockSignals(False)
 
         if not is_edit:
-            self._cancel_draw_mode()
+            self._cancel_draw_mode(refresh=False)
 
     def _start_draw_mode(self, shape_type):
         if self.mode != "edit":
@@ -339,10 +431,11 @@ class UserPanelWindow(QWidget):
             f"EDIT: draw mode active ({shape_type}). Drag on empty canvas area to create shape."
         )
 
-    def _cancel_draw_mode(self):
+    def _cancel_draw_mode(self, refresh=True):
         self.draw_mode = None
         self.draw_start_cell = None
-        self.refresh_mode_ui()
+        if refresh:
+            self.refresh_mode_ui()
 
     def _canvas_cell_from_pos(self, pos):
         if self.grid_rows <= 0 or self.grid_cols <= 0:
@@ -426,6 +519,7 @@ class UserPanelWindow(QWidget):
             self,
             fixed_behavior=behavior,
             parent_candidates=self._group_parent_candidates(),
+            live_preview_default=False,
         )
         if behavior == "tx":
             dlg.combo_widget_type.setCurrentText("button")
@@ -469,6 +563,7 @@ class UserPanelWindow(QWidget):
             self,
             preset=cfg,
             parent_candidates=self._group_parent_candidates(exclude_id=cfg.get("id")),
+            live_preview_default=True,
         )
         preview_applied = False
 
@@ -495,6 +590,8 @@ class UserPanelWindow(QWidget):
         self.rebuild_grid()
 
     def delete_selected_widget(self):
+        if self.mode != "edit":
+            return
         cfg = self._get_selected_config()
         if not cfg:
             QMessageBox.information(self, "Info", "Select a widget first.")
@@ -1128,6 +1225,8 @@ class UserPanelWindow(QWidget):
         self.rebuild_grid()
 
     def nudge_selected(self, dx, dy):
+        if self.mode != "edit":
+            return
         cfg = self._get_selected_config()
         if not cfg:
             return
@@ -1141,6 +1240,8 @@ class UserPanelWindow(QWidget):
         self.rebuild_grid()
 
     def resize_selected_span(self, dcol_span, drow_span):
+        if self.mode != "edit":
+            return
         cfg = self._get_selected_config()
         if not cfg:
             return
@@ -1616,12 +1717,19 @@ class UserPanelWindow(QWidget):
             self._simulate_apply_to_cfg(cfg, value)
 
     def _toggle_auto_sim(self, checked):
+        self.act_sim_auto.blockSignals(True)
+        self.act_sim_auto.setChecked(bool(checked))
+        self.act_sim_auto.blockSignals(False)
+
         if checked:
             if self.mode == "edit":
                 QMessageBox.information(self, "RX Simulator", "Switch to STANDBY or RUN mode to start auto simulation.")
                 self.btn_sim_auto.blockSignals(True)
                 self.btn_sim_auto.setChecked(False)
                 self.btn_sim_auto.blockSignals(False)
+                self.act_sim_auto.blockSignals(True)
+                self.act_sim_auto.setChecked(False)
+                self.act_sim_auto.blockSignals(False)
                 return
             self._sim_phase = 0.0
             self._sim_timer.start()
