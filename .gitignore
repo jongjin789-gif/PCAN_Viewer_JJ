@@ -1,5 +1,13 @@
 # Ignore log files/folders
 log/
 **/build/
+**/dist/
 **/**/**/log/
 *.zip
+
+# Python cache/artifacts
+**/__pycache__/
+*.py[cod]
+
+# App runtime state
+PCAN_Viewer_JJ_R007/PCAN_Viewer_JJ.pk
