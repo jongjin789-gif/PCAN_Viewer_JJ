@@ -7,6 +7,10 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from src.main_window import UniversalCANMonitor
 
+# User panel edit-mode password settings (modifiable by code)
+USER_PANEL_EDIT_PASSWORD_ENABLED = True
+USER_PANEL_EDIT_PASSWORD = "1234"
+
 def get_viewer_mode():
     """PCAN_Viewer_JJ.pk 파일의 최상단에서 viewer_mode_only 값을 읽어옵니다."""
     if getattr(sys, 'frozen', False):
@@ -43,6 +47,12 @@ if __name__ == '__main__':
     app.setStyle("Fusion") 
     
     viewer_mode = get_viewer_mode()
-    window = UniversalCANMonitor(viewer_only=viewer_mode)
+    window = UniversalCANMonitor(
+        viewer_only=viewer_mode,
+        user_panel_security={
+            "enabled": USER_PANEL_EDIT_PASSWORD_ENABLED,
+            "password": USER_PANEL_EDIT_PASSWORD,
+        },
+    )
     window.show()
     sys.exit(app.exec_())

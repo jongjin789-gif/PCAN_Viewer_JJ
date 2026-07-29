@@ -3,37 +3,33 @@
     "tx_packets": [],
     "db_files": {
         "1": [
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/RT3000 DBC_260422_3.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/VCU_CAN1_R22_20260312_1.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/WheelVector_LoadSensor_2.sym"
+            "D:/COMPANY/GitHub/PJJ_Project/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/RT3000 DBC_260422_3.sym",
+            "D:/COMPANY/GitHub/PJJ_Project/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/VCU_CAN1_R22_20260312_1.sym",
+            "D:/COMPANY/GitHub/PJJ_Project/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/WheelVector_LoadSensor_2.sym"
         ],
-        "2": [
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/RT3000 DBC_260422_3.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/VCU_CAN1_R22_20260312_1.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/WheelVector_LoadSensor_2.sym"
-        ],
+        "2": [],
         "3": []
     },
     "can_config": {
         "1": {
-            "channel": "PCAN-USB Pro FD (0x51) [FD]",
+            "channel": "No available PCAN channels found",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "Off",
+            "data_bitrate": "N/A",
             "is_open": false
         },
         "2": {
-            "channel": "PCAN-USB Pro FD (0x51) [FD]",
+            "channel": "No available PCAN channels found",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "Off",
+            "data_bitrate": "N/A",
             "is_open": false
         },
         "3": {
-            "channel": "PCAN-USB Pro FD (0x51) [FD]",
+            "channel": "No available PCAN channels found",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "Off",
+            "data_bitrate": "N/A",
             "is_open": false
         }
     }
