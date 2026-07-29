@@ -15,6 +15,7 @@ from src.graph_realtime import SignalGraphWindow
 from src.record_window import RecordWindow
 from src.log_viewer import LogViewerWindow
 from src.tx_panel import TxPanel
+from src.user_panel import UserPanelWindow
 
 class UniversalCANMonitor(QMainWindow):
     def __init__(self, viewer_only=False):
@@ -41,6 +42,8 @@ class UniversalCANMonitor(QMainWindow):
         self.active_graphs = [] # [SignalGraphWindow, ...]
         self.record_window = None
         self.log_viewers = [] # [LogViewerWindow, ...]
+        self.user_panel_window = None
+        self.user_tx_cache = {}
         
         self.init_ui()
         if not self.viewer_only:
@@ -239,6 +242,9 @@ class UniversalCANMonitor(QMainWindow):
         # 4. 송신부 (Tx 패널) 적용 및 QSplitter 구성
         # ---------------------------------------------------------
         self.tx_panel = TxPanel(self.buses, self.db_messages, self)
+        self.btn_user_panel = QPushButton("User Panel")
+        self.btn_user_panel.clicked.connect(self.open_user_panel)
+        self.tx_panel.insert_toolbar_widget_before_clear(self.btn_user_panel)
         
         split_view = QSplitter(Qt.Vertical)
         split_view.addWidget(tree_group)
@@ -452,6 +458,97 @@ class UniversalCANMonitor(QMainWindow):
             False,
             bus_num
         )
+
+    def _pack_signal_to_payload(self, payload, binding, phys_value):
+        """저장된 바인딩 정보로 payload에 값을 비트 필드로 반영합니다.
+        현재 fallback 경로는 little_endian만 지원합니다.
+        """
+        start_bit = int(binding.get("start_bit", 0))
+        bit_length = int(binding.get("bit_length", 1))
+        scale = float(binding.get("scale", 1.0))
+        offset = float(binding.get("offset", 0.0))
+        signed = bool(binding.get("signed", False))
+        byte_order = str(binding.get("byte_order", "little_endian"))
+
+        if byte_order == "big_endian":
+            raise ValueError("Big endian fallback encoding is not supported yet.")
+
+        if bit_length <= 0 or bit_length > 64:
+            raise ValueError("Invalid bit length.")
+
+        raw_f = (float(phys_value) - offset) / scale if scale != 0 else 0.0
+        raw = int(round(raw_f))
+
+        if signed:
+            min_raw = -(1 << (bit_length - 1))
+            max_raw = (1 << (bit_length - 1)) - 1
+        else:
+            min_raw = 0
+            max_raw = (1 << bit_length) - 1
+
+        raw = max(min_raw, min(max_raw, raw))
+
+        if signed and raw < 0:
+            raw = (1 << bit_length) + raw
+
+        max_bits = len(payload) * 8
+        if start_bit + bit_length > max_bits:
+            raise ValueError("Bit range exceeds DLC.")
+
+        current = int.from_bytes(payload, byteorder="little", signed=False)
+        mask = ((1 << bit_length) - 1) << start_bit
+        current = (current & ~mask) | ((raw << start_bit) & mask)
+        new_payload = current.to_bytes(len(payload), byteorder="little", signed=False)
+        return bytearray(new_payload)
+
+    def send_user_panel_value(self, binding, phys_value):
+        """User Panel에서 전달된 값을 CAN 프레임으로 인코딩하여 단발 전송합니다."""
+        bus_num = int(binding.get("bus", 1))
+        can_id = int(binding.get("can_id", 0))
+        dlc = int(binding.get("dlc", 8))
+        dlc = max(1, min(64, dlc))
+
+        bus_obj = self.buses.get(bus_num)
+        if bus_obj is None:
+            raise RuntimeError(f"Bus {bus_num} is not connected.")
+
+        key = (bus_num, can_id, dlc)
+        payload = bytearray(self.user_tx_cache.get(key, bytes([0] * dlc)))
+        if len(payload) != dlc:
+            payload = bytearray([0] * dlc)
+
+        payload = self._pack_signal_to_payload(payload, binding, phys_value)
+        self.user_tx_cache[key] = bytes(payload)
+
+        is_fd = dlc > 8
+        if is_fd and not self.bus_capabilities[bus_num].get('is_fd', False):
+            raise RuntimeError(f"Bus {bus_num} does not support FD payload length {dlc}.")
+
+        msg = can.Message(
+            arbitration_id=can_id,
+            data=bytes(payload),
+            is_extended_id=(can_id > 0x7FF),
+            is_fd=is_fd,
+            bitrate_switch=False
+        )
+        bus_obj.send(msg)
+        self.record_tx_activity(bus_num, can_id, bytes(payload), is_fd)
+
+    def open_user_panel(self):
+        if self.viewer_only:
+            QMessageBox.information(self, "Info", "User panel is disabled in viewer-only mode.")
+            return
+
+        try:
+            if self.user_panel_window is not None and self.user_panel_window.isVisible():
+                self.user_panel_window.raise_()
+                self.user_panel_window.activateWindow()
+                return
+        except RuntimeError:
+            self.user_panel_window = None
+
+        self.user_panel_window = UserPanelWindow(self, self.db_messages, None)
+        self.user_panel_window.show()
 
     def search_can_channels(self, bus_num=None):
         """OS에 따라 CAN 채널 탐색 로직을 분기합니다."""
@@ -1214,6 +1311,17 @@ class UniversalCANMonitor(QMainWindow):
                         item.setText(5, hex_str)
                         item.setText(7, f"{stats['cycle']:.1f}")
                         item.setText(8, str(stats['count']))
+
+                        if self.user_panel_window and self.user_panel_window.isVisible():
+                            try:
+                                self.user_panel_window.on_message_update(
+                                    bus_num,
+                                    can_id,
+                                    stats.get("data", b""),
+                                    stats.get("last_time", time.time())
+                                )
+                            except RuntimeError:
+                                self.user_panel_window = None
             except RuntimeError:
                 pass
                 
@@ -1236,6 +1344,12 @@ class UniversalCANMonitor(QMainWindow):
                         else:
                             display_val = val if isinstance(val, str) else (f"{val:.3f}" if isinstance(val, float) else str(val))
                         item.setText(5, display_val)
+
+                    if self.user_panel_window and self.user_panel_window.isVisible():
+                        try:
+                            self.user_panel_window.on_signal_update(bus_num, sig_name, val, unit, ts)
+                        except RuntimeError:
+                            self.user_panel_window = None
                             
                     item_unit = item.text(6)
                     for graph in self.active_graphs:
@@ -1289,6 +1403,13 @@ class UniversalCANMonitor(QMainWindow):
         # 메인 윈도우가 닫힐 때 모든 로그 뷰어 창도 닫기
         for viewer in list(getattr(self, 'log_viewers', [])):
             viewer.close()
+
+        # 사용자 패널 창이 열려 있으면 함께 종료
+        try:
+            if self.user_panel_window and self.user_panel_window.isVisible():
+                self.user_panel_window.close()
+        except RuntimeError:
+            pass
             
         # 메인 윈도우가 닫힐 때 송신부 타이머 종료
         if hasattr(self, 'tx_panel') and not self.viewer_only:

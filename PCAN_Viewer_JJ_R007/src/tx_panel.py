@@ -757,7 +757,7 @@ class TxPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        toolbar = QHBoxLayout()
+        self.toolbar = QHBoxLayout()
         self.btn_add = QPushButton("Create Packet")
         self.btn_load = QPushButton("Load Tx List")
         self.btn_save = QPushButton("Save Tx List")
@@ -768,12 +768,12 @@ class TxPanel(QWidget):
         self.btn_save.clicked.connect(self.on_save_packets)
         self.btn_clear_all.clicked.connect(self.on_clear_all_packets)
         
-        toolbar.addWidget(self.btn_add)
-        toolbar.addWidget(self.btn_load)
-        toolbar.addWidget(self.btn_save)
-        toolbar.addStretch()
-        toolbar.addWidget(self.btn_clear_all)
-        layout.addLayout(toolbar)
+        self.toolbar.addWidget(self.btn_add)
+        self.toolbar.addWidget(self.btn_load)
+        self.toolbar.addWidget(self.btn_save)
+        self.toolbar.addStretch()
+        self.toolbar.addWidget(self.btn_clear_all)
+        layout.addLayout(self.toolbar)
         
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["CAN BUS", "CAN ID", "CAN Type", "Data Length", "Packet Type", "dbc Symbol", "Data", "Cycle Time", "Count", "Note", "Action"])
@@ -821,6 +821,16 @@ class TxPanel(QWidget):
         self.shortcut_edit = QShortcut(QKeySequence(Qt.Key_Return), self.tree)
         self.shortcut_edit.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_edit.activated.connect(self.edit_selected_packet)
+
+    def insert_toolbar_widget_before_clear(self, widget):
+        """외부 기능 버튼을 Clear All Packets 왼쪽에 배치합니다."""
+        if not hasattr(self, 'toolbar'):
+            return
+        index = self.toolbar.indexOf(self.btn_clear_all)
+        if index < 0:
+            self.toolbar.addWidget(widget)
+        else:
+            self.toolbar.insertWidget(index, widget)
 
     def update_all_action_buttons(self):
         for i in range(self.tree.topLevelItemCount()):
