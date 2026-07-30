@@ -15,11 +15,13 @@ from src.graph_realtime import SignalGraphWindow
 from src.record_window import RecordWindow
 from src.log_viewer import LogViewerWindow
 from src.tx_panel import TxPanel
+from src.user_panel import UserPanelWindow
 
 class UniversalCANMonitor(QMainWindow):
-    def __init__(self, viewer_only=False):
+    def __init__(self, viewer_only=False, user_panel_security=None):
         super().__init__()
         self.viewer_only = viewer_only
+        self.user_panel_security = user_panel_security or {"enabled": False, "password": ""}
         
         app_version = self.get_app_version()
         version_str = f" - {app_version}" if app_version else ""
@@ -41,6 +43,8 @@ class UniversalCANMonitor(QMainWindow):
         self.active_graphs = [] # [SignalGraphWindow, ...]
         self.record_window = None
         self.log_viewers = [] # [LogViewerWindow, ...]
+        self.user_panel_window = None
+        self.user_tx_cache = {}
         
         self.init_ui()
         if not self.viewer_only:
@@ -239,6 +243,9 @@ class UniversalCANMonitor(QMainWindow):
         # 4. 송신부 (Tx 패널) 적용 및 QSplitter 구성
         # ---------------------------------------------------------
         self.tx_panel = TxPanel(self.buses, self.db_messages, self)
+        self.btn_user_panel = QPushButton("User Panel")
+        self.btn_user_panel.clicked.connect(self.open_user_panel)
+        self.tx_panel.insert_toolbar_widget_before_clear(self.btn_user_panel)
         
         split_view = QSplitter(Qt.Vertical)
         split_view.addWidget(tree_group)
@@ -452,6 +459,152 @@ class UniversalCANMonitor(QMainWindow):
             False,
             bus_num
         )
+
+    def _pack_signal_to_payload(self, payload, binding, phys_value):
+        """저장된 바인딩 정보로 payload에 값을 비트 필드로 반영합니다.
+        현재 fallback 경로는 little_endian만 지원합니다.
+        """
+        start_bit = int(binding.get("start_bit", 0))
+        bit_length = int(binding.get("bit_length", 1))
+        scale = float(binding.get("scale", 1.0))
+        offset = float(binding.get("offset", 0.0))
+        signed = bool(binding.get("signed", False))
+        byte_order = str(binding.get("byte_order", "little_endian"))
+
+        if byte_order == "big_endian":
+            raise ValueError("Big endian fallback encoding is not supported yet.")
+
+        if bit_length <= 0 or bit_length > 64:
+            raise ValueError("Invalid bit length.")
+
+        raw_f = (float(phys_value) - offset) / scale if scale != 0 else 0.0
+        raw = int(round(raw_f))
+
+        if signed:
+            min_raw = -(1 << (bit_length - 1))
+            max_raw = (1 << (bit_length - 1)) - 1
+        else:
+            min_raw = 0
+            max_raw = (1 << bit_length) - 1
+
+        raw = max(min_raw, min(max_raw, raw))
+
+        if signed and raw < 0:
+            raw = (1 << bit_length) + raw
+
+        max_bits = len(payload) * 8
+        if start_bit + bit_length > max_bits:
+            raise ValueError("Bit range exceeds DLC.")
+
+        current = int.from_bytes(payload, byteorder="little", signed=False)
+        mask = ((1 << bit_length) - 1) << start_bit
+        current = (current & ~mask) | ((raw << start_bit) & mask)
+        new_payload = current.to_bytes(len(payload), byteorder="little", signed=False)
+        return bytearray(new_payload)
+
+    def send_user_panel_value(self, binding, phys_value):
+        """User Panel에서 전달된 값을 CAN 프레임으로 인코딩하여 단발 전송합니다."""
+        bus_num, can_id, dlc, _key = self.stage_user_panel_value(binding, phys_value)
+        self.flush_user_panel_frame(bus_num, can_id, dlc)
+
+    def stage_user_panel_value(self, binding, phys_value):
+        """User Panel 값을 내부 CAN 프레임 캐시에만 반영하고 즉시 송신하지 않습니다."""
+        bus_num = int(binding.get("bus", 1))
+        can_id = int(binding.get("can_id", 0))
+        dlc = int(binding.get("dlc", 8))
+        dlc = max(1, min(64, dlc))
+
+        key = (bus_num, can_id, dlc)
+        payload = bytearray(self.user_tx_cache.get(key, bytes([0] * dlc)))
+        if len(payload) != dlc:
+            payload = bytearray([0] * dlc)
+
+        payload = self._pack_signal_to_payload(payload, binding, phys_value)
+        self.user_tx_cache[key] = bytes(payload)
+        return bus_num, can_id, dlc, key
+
+    def flush_user_panel_frame(self, bus_num, can_id, dlc):
+        """내부 캐시에 저장된 User Panel 프레임을 송신합니다."""
+        dlc = max(1, min(64, int(dlc)))
+        key = (int(bus_num), int(can_id), dlc)
+        payload = bytes(self.user_tx_cache.get(key, bytes([0] * dlc)))
+
+        bus_obj = self.buses.get(int(bus_num))
+        if bus_obj is None:
+            raise RuntimeError(f"Bus {bus_num} is not connected.")
+
+        is_fd = dlc > 8
+        if is_fd and not self.bus_capabilities[int(bus_num)].get('is_fd', False):
+            raise RuntimeError(f"Bus {bus_num} does not support FD payload length {dlc}.")
+
+        msg = can.Message(
+            arbitration_id=int(can_id),
+            data=payload,
+            is_extended_id=(int(can_id) > 0x7FF),
+            is_fd=is_fd,
+            bitrate_switch=False
+        )
+        bus_obj.send(msg)
+        self.record_tx_activity(int(bus_num), int(can_id), payload, is_fd)
+
+    def open_user_panel(self):
+        if self.viewer_only:
+            QMessageBox.information(self, "Info", "User panel is disabled in viewer-only mode.")
+            return
+
+        try:
+            if self.user_panel_window is not None and self.user_panel_window.isVisible():
+                self.user_panel_window.raise_()
+                self.user_panel_window.activateWindow()
+                return
+        except RuntimeError:
+            self.user_panel_window = None
+
+        self.user_panel_window = UserPanelWindow(
+            self,
+            self.db_messages,
+            None,
+            security_config=self.user_panel_security,
+        )
+        self.user_panel_window.show()
+
+    def get_db_file_paths_by_bus(self):
+        result = {1: [], 2: [], 3: []}
+        for bus_num in (1, 2, 3):
+            lw = self.list_db_files.get(bus_num)
+            if not lw:
+                continue
+            for i in range(lw.count()):
+                p = lw.item(i).data(Qt.UserRole + 1)
+                if p:
+                    result[bus_num].append(p)
+        return result
+
+    def replace_db_files_by_bus(self, db_paths_by_bus):
+        # 열린 그래프는 DB 기준이 바뀌면 무효가 되므로 먼저 닫습니다.
+        for g in list(self.active_graphs):
+            try:
+                g.close()
+            except Exception:
+                pass
+        self.active_graphs = []
+
+        for bus_num in (1, 2, 3):
+            self.list_db_files[bus_num].clear()
+            self.db_messages[bus_num].clear()
+            self.reset_tree_values(bus_num)
+
+        for bus_num in (1, 2, 3):
+            for p in db_paths_by_bus.get(bus_num, []):
+                if os.path.exists(p):
+                    self.load_db_from_path(p, bus_num, auto_save=False)
+
+        self.btn_open_log.setEnabled(any(self.db_messages.values()))
+
+        if hasattr(self, 'tx_panel') and not self.viewer_only:
+            for bus_num in (1, 2, 3):
+                self.tx_panel.refresh_db_symbols(bus_num)
+            self.tx_panel.auto_save_packets()
 
     def search_can_channels(self, bus_num=None):
         """OS에 따라 CAN 채널 탐색 로직을 분기합니다."""
@@ -1214,6 +1367,17 @@ class UniversalCANMonitor(QMainWindow):
                         item.setText(5, hex_str)
                         item.setText(7, f"{stats['cycle']:.1f}")
                         item.setText(8, str(stats['count']))
+
+                        if self.user_panel_window and self.user_panel_window.isVisible():
+                            try:
+                                self.user_panel_window.on_message_update(
+                                    bus_num,
+                                    can_id,
+                                    stats.get("data", b""),
+                                    stats.get("last_time", time.time())
+                                )
+                            except RuntimeError:
+                                self.user_panel_window = None
             except RuntimeError:
                 pass
                 
@@ -1236,6 +1400,12 @@ class UniversalCANMonitor(QMainWindow):
                         else:
                             display_val = val if isinstance(val, str) else (f"{val:.3f}" if isinstance(val, float) else str(val))
                         item.setText(5, display_val)
+
+                    if self.user_panel_window and self.user_panel_window.isVisible():
+                        try:
+                            self.user_panel_window.on_signal_update(bus_num, sig_name, val, unit, ts)
+                        except RuntimeError:
+                            self.user_panel_window = None
                             
                     item_unit = item.text(6)
                     for graph in self.active_graphs:
@@ -1289,6 +1459,13 @@ class UniversalCANMonitor(QMainWindow):
         # 메인 윈도우가 닫힐 때 모든 로그 뷰어 창도 닫기
         for viewer in list(getattr(self, 'log_viewers', [])):
             viewer.close()
+
+        # 사용자 패널 창이 열려 있으면 함께 종료
+        try:
+            if self.user_panel_window and self.user_panel_window.isVisible():
+                self.user_panel_window.close()
+        except RuntimeError:
+            pass
             
         # 메인 윈도우가 닫힐 때 송신부 타이머 종료
         if hasattr(self, 'tx_panel') and not self.viewer_only:

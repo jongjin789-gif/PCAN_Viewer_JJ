@@ -64,6 +64,8 @@ chmod +x install_linux.sh
 
 2. **상세 사용법**:
    - 프로그램의 모든 기능에 대한 자세한 설명은 **MANUAL.md (사용자 매뉴얼)** 파일을 참고하세요.
+   - User Panel 인수 점검은 **USER_PANEL_ACCEPTANCE_CHECKLIST.md**를 참고하세요.
+   - User Panel 변경 요약은 **USER_PANEL_RELEASE_NOTES.md**를 참고하세요.
 
 3. **채널 연결 (Connection)**:
    - 상단의 **Connection Control** 패널에서 사용하려는 Bus의 채널과 통신 속도(Baudrate)를 선택합니다.
