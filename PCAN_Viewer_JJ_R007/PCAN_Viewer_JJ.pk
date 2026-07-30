@@ -3,37 +3,31 @@
     "tx_packets": [],
     "db_files": {
         "1": [
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/RT3000 DBC_260422_3.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/VCU_CAN1_R22_20260312_1.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/WheelVector_LoadSensor_2.sym"
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/Doc/Ioniq5_Steer_20260701.sym"
         ],
-        "2": [
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/RT3000 DBC_260422_3.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/VCU_CAN1_R22_20260312_1.sym",
-            "D:/Project/.Common/Test/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/WheelVector_LoadSensor_2.sym"
-        ],
+        "2": [],
         "3": []
     },
     "can_config": {
         "1": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
-            "is_open": false
+            "data_bitrate": "Off",
+            "is_open": true
         },
         "2": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
+            "data_bitrate": "Off",
             "is_open": false
         },
         "3": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
+            "data_bitrate": "Off",
             "is_open": false
         }
     }

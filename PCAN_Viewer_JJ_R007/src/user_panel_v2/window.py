@@ -3,7 +3,7 @@ import json
 import math
 import time
 import uuid
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAction,
@@ -22,9 +22,11 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QDoubleSpinBox,
     QProgressBar,
+    QSizePolicy,
     QShortcut,
     QSpinBox,
     QSlider,
+    QRubberBand,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -105,7 +107,10 @@ class UserPanelWindow(QWidget):
         self._drag_start_global = None
         self._drag_origin_cell = None
         self._drag_origin_span = None
+        self._drag_origin_parent = None
         self._drag_resize_mode = False
+        self._drag_preview_band = None
+        self._tx_armed = False
         self._prop_syncing = False
         self._overlap_map = {}
         self._conflict_cursor = {}
@@ -215,13 +220,19 @@ class UserPanelWindow(QWidget):
         sim_layout = QVBoxLayout(sim_box)
         sim_row = QHBoxLayout()
         self.spin_sim_value = QDoubleSpinBox()
-        self.spin_sim_value.setDecimals(6)
+        self.spin_sim_value.setDecimals(3)
         self.spin_sim_value.setRange(-1000000.0, 1000000.0)
         self.spin_sim_value.setValue(1.0)
+        self.spin_sim_value.setToolTip("Manual RX simulator value. Displays up to 3 decimals; integers are shown without trailing .000.")
         self.btn_sim_selected = QPushButton("Apply Selected RX")
         self.btn_sim_all = QPushButton("Apply All RX")
         self.btn_sim_auto = QPushButton("Auto Sim: OFF")
         self.btn_sim_auto.setCheckable(True)
+        self.label_sim_help = QLabel(
+            "Value is the manual RX simulator input. Apply Selected / Apply All updates RX tools without CAN; Auto Sim uses the same value range while running."
+        )
+        self.label_sim_help.setWordWrap(True)
+        self.label_sim_help.setStyleSheet("color:#555;")
 
         self.btn_sim_selected.clicked.connect(self.simulate_selected_rx)
         self.btn_sim_all.clicked.connect(self.simulate_all_rx)
@@ -230,6 +241,7 @@ class UserPanelWindow(QWidget):
         sim_row.addWidget(QLabel("Value"))
         sim_row.addWidget(self.spin_sim_value)
         sim_layout.addLayout(sim_row)
+        sim_layout.addWidget(self.label_sim_help)
         sim_layout.addWidget(self.btn_sim_selected)
         sim_layout.addWidget(self.btn_sim_all)
         sim_layout.addWidget(self.btn_sim_auto)
@@ -393,10 +405,12 @@ class UserPanelWindow(QWidget):
 
     def refresh_mode_ui(self):
         is_edit = self.mode == "edit"
+        if self.mode != "run":
+            self._tx_armed = False
         self.label_mode.setText(
             "EDIT: create/delete/arrange tools"
             if self.mode == "edit"
-            else ("STANDBY: RX update only, TX blocked" if self.mode == "standby" else "RUN: RX update + TX enabled")
+            else ("STANDBY: RX update only, TX blocked" if self.mode == "standby" else "RUN: RX update + TX enabled after first user action")
         )
 
         if self.mode != "run":
@@ -420,6 +434,7 @@ class UserPanelWindow(QWidget):
 
         if not is_edit:
             self._cancel_draw_mode(refresh=False)
+        self._sync_frame_timers_from_configs()
 
     def _start_draw_mode(self, shape_type):
         if self.mode != "edit":
@@ -883,11 +898,14 @@ class UserPanelWindow(QWidget):
             item = self.canvas_layout.takeAt(0)
             w = item.widget()
             if w:
+                w.hide()
                 w.setParent(None)
+                w.deleteLater()
 
         self.widget_frames.clear()
         self.widget_controls.clear()
         self.widget_child_hosts.clear()
+        self._hide_drag_preview()
 
         sorted_cfg = sorted(self.widgets_config, key=lambda c: int(c.get("z_index", 0)))
 
@@ -906,7 +924,7 @@ class UserPanelWindow(QWidget):
             frame_layout.addWidget(title)
 
             ctrl, child_host = self._create_runtime_widget(cfg)
-            frame_layout.addWidget(ctrl, 1)
+            frame_layout.addWidget(ctrl, 0, Qt.AlignLeft | Qt.AlignTop)
 
             wid = cfg.get("id")
             self.widget_frames[wid] = frame
@@ -944,6 +962,28 @@ class UserPanelWindow(QWidget):
         self._sync_frame_timers_from_configs()
 
     def _bind_select(self, widget, widget_id):
+        widget.setMouseTracking(True)
+
+        def _update_cursor(event):
+            if self.mode != "edit" or self.draw_mode is not None:
+                widget.unsetCursor()
+                return
+
+            cfg = self._get_selected_config()
+            if not cfg or cfg.get("id") != widget_id:
+                widget.setCursor(Qt.ArrowCursor)
+                return
+
+            local = event.pos() if event is not None else None
+            if local is None:
+                widget.setCursor(Qt.ArrowCursor)
+                return
+
+            if local.x() >= (max(1, widget.width()) - 16) and local.y() >= (max(1, widget.height()) - 16):
+                widget.setCursor(Qt.SizeFDiagCursor)
+            else:
+                widget.setCursor(Qt.OpenHandCursor)
+
         def _on_press(event):
             self.selected_widget_id = widget_id
             self._refresh_selection_ui()
@@ -952,6 +992,7 @@ class UserPanelWindow(QWidget):
                 try:
                     self._drag_target_id = widget_id
                     self._drag_start_global = event.globalPos()
+                    self._drag_origin_parent = self._get_selected_config().get("parent_id") if self._get_selected_config() else None
                     cfg = self._get_selected_config()
                     if cfg:
                         self._drag_origin_cell = (int(cfg.get("row", 0)), int(cfg.get("col", 0)))
@@ -967,6 +1008,42 @@ class UserPanelWindow(QWidget):
                     self._drag_origin_cell = None
                     self._drag_origin_span = None
                     self._drag_resize_mode = False
+
+        def _on_move(event):
+            _update_cursor(event)
+            if self.mode != "edit" or self.draw_mode is not None:
+                return
+            if self._drag_target_id != widget_id:
+                return
+            if self._drag_start_global is None or event is None:
+                return
+            if not (event.buttons() & Qt.LeftButton):
+                return
+
+            cfg = self._get_selected_config()
+            if not cfg:
+                return
+
+            end_pos = event.globalPos()
+            delta_x = int(end_pos.x() - self._drag_start_global.x())
+            delta_y = int(end_pos.y() - self._drag_start_global.y())
+            cell_w = max(1.0, float(self.canvas.width()) / max(1, self.grid_cols))
+            cell_h = max(1.0, float(self.canvas.height()) / max(1, self.grid_rows))
+
+            if self._drag_resize_mode:
+                dcol_span = int(round(delta_x / cell_w))
+                drow_span = int(round(delta_y / cell_h))
+                row_span0, col_span0 = self._drag_origin_span or (int(cfg.get("row_span", 1)), int(cfg.get("col_span", 1)))
+                preview_row_span = max(1, min(self.grid_rows, row_span0 + drow_span))
+                preview_col_span = max(1, min(self.grid_cols, col_span0 + dcol_span))
+                self._show_drag_preview(cfg, preview_row_span, preview_col_span, resize_mode=True)
+            else:
+                dcol = int(round(delta_x / cell_w))
+                drow = int(round(delta_y / cell_h))
+                preview_row = max(0, min(self.grid_rows - 1, int(self._drag_origin_cell[0]) + drow))
+                preview_col = max(0, min(self.grid_cols - 1, int(self._drag_origin_cell[1]) + dcol))
+                new_parent = self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
+                self._show_drag_preview(cfg, preview_row, preview_col, parent_id=new_parent, resize_mode=False)
 
         def _on_release(event):
             if self.mode != "edit" or self.draw_mode is not None:
@@ -1014,9 +1091,12 @@ class UserPanelWindow(QWidget):
                 self._drag_start_global = None
                 self._drag_origin_cell = None
                 self._drag_origin_span = None
+                self._drag_origin_parent = None
                 self._drag_resize_mode = False
+                self._hide_drag_preview()
 
         widget.mousePressEvent = _on_press
+        widget.mouseMoveEvent = _on_move
         widget.mouseReleaseEvent = _on_release
 
     def _refresh_selection_ui(self):
@@ -1194,6 +1274,58 @@ class UserPanelWindow(QWidget):
             return rect, None
 
         return QLabel("-"), None
+
+    def _preview_parent_widget(self, cfg):
+        parent_id = cfg.get("parent_id")
+        if parent_id and parent_id in self.widget_child_hosts and self.widget_child_hosts[parent_id] is not None:
+            host_layout = self.widget_child_hosts[parent_id]
+            host_widget = host_layout.parentWidget()
+            if host_widget is not None:
+                return host_widget
+        return self.canvas
+
+    def _show_drag_preview(self, cfg, row_or_span, col_or_span, parent_id=None, resize_mode=False):
+        parent_widget = self._preview_parent_widget(cfg)
+        if parent_widget is None:
+            return
+
+        if resize_mode:
+            row = int(cfg.get("row", 0))
+            col = int(cfg.get("col", 0))
+            row_span = int(row_or_span)
+            col_span = int(col_or_span)
+        else:
+            row = int(row_or_span)
+            col = int(col_or_span)
+            row_span = max(1, int(cfg.get("row_span", 1)))
+            col_span = max(1, int(cfg.get("col_span", 1)))
+
+        parent_w = max(1, parent_widget.width())
+        parent_h = max(1, parent_widget.height())
+        cell_w = float(parent_w) / max(1, self.grid_cols)
+        cell_h = float(parent_h) / max(1, self.grid_rows)
+        x = int(round(col * cell_w))
+        y = int(round(row * cell_h))
+        w = max(1, int(round(col_span * cell_w)))
+        h = max(1, int(round(row_span * cell_h)))
+
+        if self._drag_preview_band is None or self._drag_preview_band.parent() is not parent_widget:
+            self._hide_drag_preview()
+            self._drag_preview_band = QRubberBand(QRubberBand.Rectangle, parent_widget)
+            self._drag_preview_band.setStyleSheet("border: 2px dashed #0078D7; background: rgba(0,120,215,30);")
+
+        self._drag_preview_band.setGeometry(QRect(x, y, w, h))
+        self._drag_preview_band.show()
+        self._drag_preview_band.raise_()
+
+    def _hide_drag_preview(self):
+        if self._drag_preview_band is not None:
+            try:
+                self._drag_preview_band.hide()
+                self._drag_preview_band.deleteLater()
+            except Exception:
+                pass
+            self._drag_preview_band = None
 
     def bring_to_front(self):
         cfg = self._get_selected_config()
@@ -1385,14 +1517,17 @@ class UserPanelWindow(QWidget):
             return
         if cfg.get("behavior") != "tx":
             return
+        self._tx_armed = True
         binding = cfg.get("binding", {})
         cycle_mode = str(binding.get("tx_cycle_mode", "immediate"))
         if cycle_mode == "immediate":
             self.request_tx_value.emit(binding, float(value))
+            self._sync_frame_timers_from_configs()
             return
 
         if not hasattr(self.main_window, "stage_user_panel_value"):
             self.request_tx_value.emit(binding, float(value))
+            self._sync_frame_timers_from_configs()
             return
 
         try:
@@ -1460,6 +1595,8 @@ class UserPanelWindow(QWidget):
     def _flush_frame(self, frame_key):
         if self.mode != "run":
             return
+        if not self._tx_armed:
+            return
         if not hasattr(self.main_window, "flush_user_panel_frame"):
             return
         bus_num, can_id, dlc = frame_key
@@ -1479,6 +1616,9 @@ class UserPanelWindow(QWidget):
 
     def _sync_frame_timers_from_configs(self):
         if self.mode != "run":
+            self._stop_all_frame_timers()
+            return
+        if not self._tx_armed:
             self._stop_all_frame_timers()
             return
 
@@ -1522,6 +1662,18 @@ class UserPanelWindow(QWidget):
         if "." not in text:
             return 0
         return min(6, len(text.split(".", 1)[1]))
+
+    def _format_display_value(self, value):
+        try:
+            num = round(float(value), 3)
+        except Exception:
+            return str(value)
+
+        if abs(num - round(num)) < 0.0005:
+            return str(int(round(num)))
+
+        text = f"{num:.3f}".rstrip("0").rstrip(".")
+        return text if text else "0"
 
     def _eval_condition(self, value, op, a, b):
         if op == "gt":
@@ -1614,7 +1766,7 @@ class UserPanelWindow(QWidget):
                     slider.setValue(int(ratio * steps))
                     slider.blockSignals(False)
                     if value_label is not None:
-                        value_label.setText(f"{v:.3f}")
+                        value_label.setText(self._format_display_value(v))
             return
 
         if wtype == "spinbox":
@@ -1662,7 +1814,7 @@ class UserPanelWindow(QWidget):
             return
 
         if wtype == "label":
-            ctrl.setText(f"{v:.3f}")
+            ctrl.setText(self._format_display_value(v))
             return
 
     def _extract_raw_value(self, payload, binding):
