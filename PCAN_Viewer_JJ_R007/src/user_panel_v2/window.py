@@ -87,8 +87,8 @@ class UserPanelWindow(QWidget):
         self.setWindowTitle("User Panel")
         self.resize(1180, 760)
 
-        self.grid_rows = 12
-        self.grid_cols = 12
+        self.grid_rows = 24
+        self.grid_cols = 24
         self.mode = "edit"
 
         self.widgets_config = []
@@ -1025,19 +1025,20 @@ class UserPanelWindow(QWidget):
                 return
 
             end_pos = event.globalPos()
-            delta_x = int(end_pos.x() - self._drag_start_global.x())
-            delta_y = int(end_pos.y() - self._drag_start_global.y())
-            cell_w = max(1.0, float(self.canvas.width()) / max(1, self.grid_cols))
-            cell_h = max(1.0, float(self.canvas.height()) / max(1, self.grid_rows))
 
             if self._drag_resize_mode:
-                dcol_span = int(round(delta_x / cell_w))
-                drow_span = int(round(delta_y / cell_h))
-                row_span0, col_span0 = self._drag_origin_span or (int(cfg.get("row_span", 1)), int(cfg.get("col_span", 1)))
-                preview_row_span = max(1, min(self.grid_rows, row_span0 + drow_span))
-                preview_col_span = max(1, min(self.grid_cols, col_span0 + dcol_span))
+                parent_id = cfg.get("parent_id")
+                r_end, c_end = self._cell_from_global_in_parent(parent_id, end_pos)
+                r_start = int(cfg.get("row", 0))
+                c_start = int(cfg.get("col", 0))
+                preview_row_span = max(1, r_end - r_start + 1)
+                preview_col_span = max(1, c_end - c_start + 1)
                 self._show_drag_preview(cfg, preview_row_span, preview_col_span, resize_mode=True)
             else:
+                delta_x = int(end_pos.x() - self._drag_start_global.x())
+                delta_y = int(end_pos.y() - self._drag_start_global.y())
+                cell_w = max(1.0, float(self.canvas.width()) / max(1, self.grid_cols))
+                cell_h = max(1.0, float(self.canvas.height()) / max(1, self.grid_rows))
                 dcol = int(round(delta_x / cell_w))
                 drow = int(round(delta_y / cell_h))
                 preview_row = max(0, min(self.grid_rows - 1, int(self._drag_origin_cell[0]) + drow))
@@ -1057,23 +1058,24 @@ class UserPanelWindow(QWidget):
 
             try:
                 end_pos = event.globalPos()
-                delta_x = int(end_pos.x() - self._drag_start_global.x())
-                delta_y = int(end_pos.y() - self._drag_start_global.y())
-                cell_w = max(1.0, float(self.canvas.width()) / max(1, self.grid_cols))
-                cell_h = max(1.0, float(self.canvas.height()) / max(1, self.grid_rows))
 
                 cfg = self._get_selected_config()
                 if not cfg:
                     return
 
                 if self._drag_resize_mode:
-                    dcol_span = int(round(delta_x / cell_w))
-                    drow_span = int(round(delta_y / cell_h))
-                    row_span0, col_span0 = self._drag_origin_span or (int(cfg.get("row_span", 1)), int(cfg.get("col_span", 1)))
-                    cfg["col_span"] = max(1, min(self.grid_cols, col_span0 + dcol_span))
-                    cfg["row_span"] = max(1, min(self.grid_rows, row_span0 + drow_span))
+                    parent_id = cfg.get("parent_id")
+                    r_end, c_end = self._cell_from_global_in_parent(parent_id, end_pos)
+                    r_start = int(cfg.get("row", 0))
+                    c_start = int(cfg.get("col", 0))
+                    cfg["row_span"] = max(1, r_end - r_start + 1)
+                    cfg["col_span"] = max(1, c_end - c_start + 1)
                     self.rebuild_grid()
                 else:
+                    delta_x = int(end_pos.x() - self._drag_start_global.x())
+                    delta_y = int(end_pos.y() - self._drag_start_global.y())
+                    cell_w = max(1.0, float(self.canvas.width()) / max(1, self.grid_cols))
+                    cell_h = max(1.0, float(self.canvas.height()) / max(1, self.grid_rows))
                     dcol = int(round(delta_x / cell_w))
                     drow = int(round(delta_y / cell_h))
                     old_parent = cfg.get("parent_id")

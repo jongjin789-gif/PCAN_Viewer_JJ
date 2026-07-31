@@ -5,8 +5,8 @@ import time
 import can, cantools
 from src.PCANBasic import *
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGroupBox, QHBoxLayout, QLabel, 
-                             QComboBox, QPushButton, QListWidget, QListWidgetItem, QShortcut, QLineEdit, 
-                             QTreeWidget, QSplitter, QMessageBox, QFileDialog)
+                             QComboBox, QPushButton, QListWidget, QListWidgetItem, QShortcut, QLineEdit,
+                             QTreeWidget, QSplitter, QMessageBox, QFileDialog, QTreeWidgetItemIterator)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QIcon, QKeySequence
 from src.utils import get_resource_path, SortableTreeWidgetItem
@@ -237,6 +237,7 @@ class UniversalCANMonitor(QMainWindow):
         self.tree.setSortingEnabled(True)
         self.tree.sortByColumn(2, Qt.AscendingOrder) # 1. CAN ID
         self.tree.sortByColumn(0, Qt.AscendingOrder) # 2. Bus (Primary Sort Key)
+        self.tree.itemChanged.connect(self.on_tree_item_changed)
         tree_layout.addWidget(self.tree)
         
         # ---------------------------------------------------------
@@ -264,6 +265,40 @@ class UniversalCANMonitor(QMainWindow):
         # 상태바 초기화
         self.statusBar().showMessage("Ready")
         
+    def on_tree_item_changed(self, item, column):
+        """트리 아이템의 체크 상태가 변경될 때 호출됩니다."""
+        # 'Message / Signal' 컬럼(3)의 체크박스 변경에만 반응합니다.
+        if column != 3:
+            return
+
+        # --- 재귀 호출 방지를 위해 시그널 처리 중단 ---
+        self.tree.blockSignals(True)
+
+        try:
+            check_state = item.checkState(3)
+            
+            # 1. 부모 아이템(메시지)이 변경된 경우 -> 모든 자식(시그널)의 상태를 동기화
+            if item.childCount() > 0:
+                if check_state != Qt.PartiallyChecked:
+                    for i in range(item.childCount()):
+                        child = item.child(i)
+                        child.setCheckState(3, check_state)
+            
+            # 2. 자식 아이템(시그널)이 변경된 경우 -> 부모의 상태를 갱신
+            else:
+                parent = item.parent()
+                if parent:
+                    checked_count = sum(1 for i in range(parent.childCount()) if parent.child(i).checkState(3) == Qt.Checked)
+                    
+                    if checked_count == 0:
+                        parent.setCheckState(3, Qt.Unchecked)
+                    elif checked_count == parent.childCount():
+                        parent.setCheckState(3, Qt.Checked)
+                    else:
+                        parent.setCheckState(3, Qt.PartiallyChecked)
+        finally:
+            self.tree.blockSignals(False)
+
     def on_channel_changed(self, bus_num):
         """선택된 PCAN 채널의 FD 지원 여부에 따라 통신 속도(Bitrate) 목록을 동적으로 업데이트합니다."""
         self.combo_bitrate[bus_num].clear()
@@ -356,7 +391,7 @@ class UniversalCANMonitor(QMainWindow):
                 if parent:
                     try:
                         bus_num_str = parent.text(0)
-                        sig_name = item.text(3)
+                        sig_name = item.text(3).strip()
                         bus_num = int(bus_num_str)
                         
                         full_sig_name = f"B{bus_num}:{sig_name}"
@@ -1286,6 +1321,10 @@ class UniversalCANMonitor(QMainWindow):
         font.setBold(True)
         msg_item.setFont(3, font)
         
+        # 부모 노드(메시지)에도 체크박스 추가
+        msg_item.setFlags(msg_item.flags() | Qt.ItemIsUserCheckable)
+        msg_item.setCheckState(3, Qt.Unchecked)
+        
         # 2. Signal Node (Child)를 생성하여 메모리 상의 부모 노드에 추가
         for sig in signals:
             sig_item = SortableTreeWidgetItem(msg_item)
@@ -1296,7 +1335,7 @@ class UniversalCANMonitor(QMainWindow):
             sig_item.setText(0, "") # Bus
             sig_item.setText(1, "") # Type
             sig_item.setText(2, "") # CAN ID
-            sig_item.setText(3, sig.name)
+            sig_item.setText(3, f"    {sig.name}")
             sig_item.setText(4, "") # Direction
             sig_item.setText(5, "-") # Value
             sig_item.setText(6, sig.unit if sig.unit else "")

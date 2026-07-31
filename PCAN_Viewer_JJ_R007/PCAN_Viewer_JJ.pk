@@ -1,30 +1,613 @@
 {
     "viewer_mode_only": false,
-    "tx_packets": [],
+    "tx_packets": [
+        {
+            "bus": 1,
+            "id": 2047,
+            "is_fd": false,
+            "length": 0,
+            "data": [],
+            "cycle": 0,
+            "note": "",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 2047,
+            "is_fd": false,
+            "length": 0,
+            "data": [],
+            "cycle": 0,
+            "note": "",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                6,
+                0
+            ],
+            "cycle": 0,
+            "note": "!1. MOT STEP 0x06",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                7,
+                0
+            ],
+            "cycle": 0,
+            "note": "!2. MOT STEP 0x07",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 5,
+            "data": [
+                47,
+                96,
+                96,
+                0,
+                4
+            ],
+            "cycle": 0,
+            "note": "!3. TORQUE MODE",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                135,
+                96,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "note": "!4. Torque - Value",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                128,
+                96,
+                0,
+                136,
+                19,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "note": "!5. max speed (RPM)",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                31,
+                0
+            ],
+            "cycle": 0,
+            "note": "!6. MOT STEP 0x1F",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                124,
+                96,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "note": "!7. HOME OFFSET",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                16,
+                16,
+                1,
+                115,
+                97,
+                118,
+                101
+            ],
+            "cycle": 0,
+            "note": "!8. EEPROM",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 0,
+            "is_fd": false,
+            "length": 2,
+            "data": [
+                128,
+                3
+            ],
+            "cycle": 0,
+            "note": "#1.NMT_PRE_OPERATION",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                4,
+                80,
+                6,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "note": "#2.WATCH_DOG",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 0,
+            "is_fd": false,
+            "length": 2,
+            "data": [
+                1,
+                3
+            ],
+            "cycle": 0,
+            "note": "#3.NMT_OPERATION",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 5,
+            "data": [
+                47,
+                96,
+                96,
+                0,
+                6
+            ],
+            "cycle": 0,
+            "note": "1. HOME MODE",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                6,
+                0
+            ],
+            "cycle": 0,
+            "note": "2. MOT STEP 0x06",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                7,
+                0
+            ],
+            "cycle": 0,
+            "note": "3. MOT STEP 0x07",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                15,
+                0
+            ],
+            "cycle": 0,
+            "note": "4. MOT STEP 0x0F",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 5,
+            "data": [
+                47,
+                152,
+                96,
+                0,
+                35
+            ],
+            "cycle": 0,
+            "note": "5. HOME METHOD",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                31,
+                0
+            ],
+            "cycle": 0,
+            "note": "6. MOT STEP 0x1F",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                124,
+                96,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "note": "7. HOME OFFSET",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                16,
+                16,
+                1,
+                115,
+                97,
+                118,
+                101
+            ],
+            "cycle": 0,
+            "note": "8. EEPROM",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                6,
+                0
+            ],
+            "cycle": 0,
+            "note": "@1. MOT STEP 0x06",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                7,
+                0
+            ],
+            "cycle": 0,
+            "note": "@2. MOT STEP 0x07",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 5,
+            "data": [
+                47,
+                96,
+                96,
+                0,
+                1
+            ],
+            "cycle": 0,
+            "note": "@3. POSITION MODE",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                15,
+                0
+            ],
+            "cycle": 0,
+            "note": "@4. MOT STEP 0x0F",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                47,
+                0
+            ],
+            "cycle": 0,
+            "note": "@5. MOT STEP 0x2F",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                122,
+                96,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "note": "@6. Position",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 8,
+            "data": [
+                35,
+                129,
+                96,
+                0,
+                232,
+                3,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "note": "@7. Velocity",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                31,
+                0
+            ],
+            "cycle": 0,
+            "note": "@8. MOT STEP 0x1F",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                64,
+                96,
+                0,
+                11,
+                0
+            ],
+            "cycle": 0,
+            "note": "@9. EMO STOP 0x0B",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 1539,
+            "is_fd": false,
+            "length": 6,
+            "data": [
+                43,
+                114,
+                96,
+                0,
+                100,
+                0
+            ],
+            "cycle": 0,
+            "note": "_MAX TORQUE SET",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        }
+    ],
     "db_files": {
         "1": [
-            "D:/Project/2026/M26002_VegaKit_InjeUniv/Doc/Ioniq5_Steer_20260701.sym"
+            "D:/Project/2025/M25032_KNU_Vega Kit/PCAN/operakit(V2)_Ver_1_0.sym"
         ],
-        "2": [],
+        "2": [
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/Doc/Ioniq5_Steer_20260701.sym",
+            "D:/Project/.Common/Test/STM32F103C8T6_Board_Pedal/ACC_BRK_Pedal_V101.sym"
+        ],
         "3": []
     },
     "can_config": {
         "1": {
-            "channel": "PCAN-USB FD (0x51) [FD]",
-            "bitrate": "500 kBit/s",
-            "fd_iso": "ISO",
-            "data_bitrate": "Off",
-            "is_open": true
-        },
-        "2": {
-            "channel": "PCAN-USB FD (0x51) [FD]",
+            "channel": "PCAN-USB Pro FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
             "data_bitrate": "Off",
             "is_open": false
         },
+        "2": {
+            "channel": "PCAN-USB Pro FD (0x52) [FD]",
+            "bitrate": "500 kBit/s",
+            "fd_iso": "ISO",
+            "data_bitrate": "Off",
+            "is_open": true
+        },
         "3": {
-            "channel": "PCAN-USB FD (0x51) [FD]",
+            "channel": "PCAN-USB Pro FD (0x52) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
             "data_bitrate": "Off",
