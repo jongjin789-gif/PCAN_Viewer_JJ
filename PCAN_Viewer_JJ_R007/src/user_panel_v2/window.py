@@ -3,10 +3,11 @@ import json
 import math
 import time
 import uuid
-from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QPoint
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAction,
+    QApplication,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -87,8 +88,8 @@ class UserPanelWindow(QWidget):
         self.setWindowTitle("User Panel")
         self.resize(1180, 760)
 
-        self.grid_rows = 24
-        self.grid_cols = 24
+        self.grid_rows = 36
+        self.grid_cols = 36
         self.mode = "edit"
 
         self.widgets_config = []
@@ -105,12 +106,14 @@ class UserPanelWindow(QWidget):
         self._shape_counter = 1
         self._drag_target_id = None
         self._drag_start_global = None
+        self._drag_offset_global = None
         self._drag_origin_cell = None
         self._drag_origin_span = None
         self._drag_origin_parent = None
         self._drag_resize_mode = False
         self._drag_preview_band = None
         self._tx_armed = False
+        self._armed_frame_keys = set()
         self._prop_syncing = False
         self._overlap_map = {}
         self._conflict_cursor = {}
@@ -253,9 +256,10 @@ class UserPanelWindow(QWidget):
 
         self.canvas = GridCanvas(self)
         self.canvas_layout = QGridLayout(self.canvas)
-        self.canvas_layout.setContentsMargins(6, 6, 6, 6)
-        self.canvas_layout.setHorizontalSpacing(6)
-        self.canvas_layout.setVerticalSpacing(6)
+        # Keep canvas grid and widget placement perfectly aligned to cell borders.
+        self.canvas_layout.setContentsMargins(0, 0, 0, 0)
+        self.canvas_layout.setHorizontalSpacing(0)
+        self.canvas_layout.setVerticalSpacing(0)
         for r in range(self.grid_rows):
             self.canvas_layout.setRowStretch(r, 1)
         for c in range(self.grid_cols):
@@ -407,6 +411,7 @@ class UserPanelWindow(QWidget):
         is_edit = self.mode == "edit"
         if self.mode != "run":
             self._tx_armed = False
+            self._armed_frame_keys.clear()
         self.label_mode.setText(
             "EDIT: create/delete/arrange tools"
             if self.mode == "edit"
@@ -432,8 +437,15 @@ class UserPanelWindow(QWidget):
         self.act_sim_auto.setChecked(self.btn_sim_auto.isChecked())
         self.act_sim_auto.blockSignals(False)
 
+        # RUN/STANDBY 모드에서는 위젯 선택 기능을 비활성화합니다.
         if not is_edit:
             self._cancel_draw_mode(refresh=False)
+            self.selected_widget_id = None
+            self.list_tools.clearSelection()
+
+        self.list_tools.setEnabled(is_edit)
+        self._refresh_selection_ui()
+
         self._sync_frame_timers_from_configs()
 
     def _start_draw_mode(self, shape_type):
@@ -460,11 +472,20 @@ class UserPanelWindow(QWidget):
 
         x = max(0, min(self.canvas.width() - 1, int(pos.x())))
         y = max(0, min(self.canvas.height() - 1, int(pos.y())))
-        col = int((x / max(1, self.canvas.width())) * self.grid_cols)
-        row = int((y / max(1, self.canvas.height())) * self.grid_rows)
-        col = max(0, min(self.grid_cols - 1, col))
-        row = max(0, min(self.grid_rows - 1, row))
+        col = self._cell_index_from_coord(x, self.canvas.width(), self.grid_cols)
+        row = self._cell_index_from_coord(y, self.canvas.height(), self.grid_rows)
         return row, col
+
+    def _cell_index_from_coord(self, coord, size, count):
+        size = max(1, int(size))
+        count = max(1, int(count))
+        c = max(0, min(size - 1, int(coord)))
+
+        for i in range(count):
+            end = int(round((i + 1) * size / float(count)))
+            if c < end:
+                return i
+        return count - 1
 
     def _on_canvas_mouse_press(self, event):
         if self.draw_mode is None or self.mode != "edit":
@@ -535,6 +556,8 @@ class UserPanelWindow(QWidget):
             fixed_behavior=behavior,
             parent_candidates=self._group_parent_candidates(),
             live_preview_default=False,
+            grid_rows=self.grid_rows,
+            grid_cols=self.grid_cols,
         )
         if behavior == "tx":
             dlg.combo_widget_type.setCurrentText("button")
@@ -579,6 +602,8 @@ class UserPanelWindow(QWidget):
             preset=cfg,
             parent_candidates=self._group_parent_candidates(exclude_id=cfg.get("id")),
             live_preview_default=True,
+            grid_rows=self.grid_rows,
+            grid_cols=self.grid_cols,
         )
         preview_applied = False
 
@@ -643,6 +668,7 @@ class UserPanelWindow(QWidget):
         cfg.setdefault("id", str(uuid.uuid4()))
         cfg.setdefault("widget_type", "label")
         cfg.setdefault("title", "Widget")
+        cfg.setdefault("title_align", "center")
         cfg.setdefault("row", 0)
         cfg.setdefault("col", 0)
         cfg.setdefault("row_span", 1)
@@ -690,6 +716,15 @@ class UserPanelWindow(QWidget):
 
         if cfg.get("parent_id") == cfg.get("id"):
             cfg["parent_id"] = None
+
+        wtype = cfg.get("widget_type", "label")
+        min_row_span = 1 if wtype == "shape_line" else 3
+        min_col_span = 1 if wtype == "shape_line" else 4
+
+        cfg["row"] = max(0, min(self.grid_rows - 1, int(cfg.get("row", 0))))
+        cfg["col"] = max(0, min(self.grid_cols - 1, int(cfg.get("col", 0))))
+        cfg["row_span"] = max(min_row_span, min(self.grid_rows, int(cfg.get("row_span", 1))))
+        cfg["col_span"] = max(min_col_span, min(self.grid_cols, int(cfg.get("col_span", 1))))
 
     def _group_parent_candidates(self, exclude_id=None):
         out = []
@@ -781,19 +816,15 @@ class UserPanelWindow(QWidget):
                 local = host_widget.mapFromGlobal(global_pos)
                 x = max(0, min(host_widget.width() - 1, int(local.x())))
                 y = max(0, min(host_widget.height() - 1, int(local.y())))
-                col = int((x / max(1, host_widget.width())) * self.grid_cols)
-                row = int((y / max(1, host_widget.height())) * self.grid_rows)
-                col = max(0, min(self.grid_cols - 1, col))
-                row = max(0, min(self.grid_rows - 1, row))
+                col = self._cell_index_from_coord(x, host_widget.width(), self.grid_cols)
+                row = self._cell_index_from_coord(y, host_widget.height(), self.grid_rows)
                 return row, col
 
         local = self.canvas.mapFromGlobal(global_pos)
         x = max(0, min(max(0, self.canvas.width() - 1), int(local.x())))
         y = max(0, min(max(0, self.canvas.height() - 1), int(local.y())))
-        col = int((x / max(1, self.canvas.width())) * self.grid_cols)
-        row = int((y / max(1, self.canvas.height())) * self.grid_rows)
-        col = max(0, min(self.grid_cols - 1, col))
-        row = max(0, min(self.grid_rows - 1, row))
+        col = self._cell_index_from_coord(x, self.canvas.width(), self.grid_cols)
+        row = self._cell_index_from_coord(y, self.canvas.height(), self.grid_rows)
         return row, col
 
     def _on_tool_list_selection_changed(self, current, _previous):
@@ -841,22 +872,31 @@ class UserPanelWindow(QWidget):
             self.spin_sel_row_span.setEnabled(enabled)
             self.spin_sel_col_span.setEnabled(enabled)
 
-            if not cfg:
-                self.spin_sel_row.setValue(0)
-                self.spin_sel_col.setValue(0)
-                self.spin_sel_row_span.setValue(1)
-                self.spin_sel_col_span.setValue(1)
-                return
-
             self.spin_sel_row.setRange(0, self.grid_rows - 1)
             self.spin_sel_col.setRange(0, self.grid_cols - 1)
-            self.spin_sel_row_span.setRange(1, self.grid_rows)
-            self.spin_sel_col_span.setRange(1, self.grid_cols)
+
+            if not cfg:
+                # 선택된 위젯이 없을 경우: 기본 최소값으로 범위를 설정하고 값을 초기화합니다.
+                self.spin_sel_row_span.setRange(3, self.grid_rows)
+                self.spin_sel_col_span.setRange(4, self.grid_cols)
+                self.spin_sel_row.setValue(0)
+                self.spin_sel_col.setValue(0)
+                self.spin_sel_row_span.setValue(3)
+                self.spin_sel_col_span.setValue(4)
+                return
+
+            # 선택된 위젯이 있을 경우: 위젯 타입에 맞는 최소 크기 제약을 적용합니다.
+            wtype = cfg.get("widget_type")
+            min_row_span = 1 if wtype == "shape_line" else 3
+            min_col_span = 1 if wtype == "shape_line" else 4
+
+            self.spin_sel_row_span.setRange(min_row_span, self.grid_rows)
+            self.spin_sel_col_span.setRange(min_col_span, self.grid_cols)
 
             self.spin_sel_row.setValue(max(0, min(self.grid_rows - 1, int(cfg.get("row", 0)))))
             self.spin_sel_col.setValue(max(0, min(self.grid_cols - 1, int(cfg.get("col", 0)))))
-            self.spin_sel_row_span.setValue(max(1, min(self.grid_rows, int(cfg.get("row_span", 1)))))
-            self.spin_sel_col_span.setValue(max(1, min(self.grid_cols, int(cfg.get("col_span", 1)))))
+            self.spin_sel_row_span.setValue(max(min_row_span, min(self.grid_rows, int(cfg.get("row_span", 1)))))
+            self.spin_sel_col_span.setValue(max(min_col_span, min(self.grid_cols, int(cfg.get("col_span", 1)))))
         finally:
             self._prop_syncing = False
 
@@ -918,13 +958,30 @@ class UserPanelWindow(QWidget):
             frame_layout.setContentsMargins(6, 6, 6, 6)
             frame_layout.setSpacing(4)
 
-            behavior = str(cfg.get("behavior", "none")).upper()
-            title = QLabel(f"[{behavior}] {cfg.get('title', 'Widget')}")
-            title.setAlignment(Qt.AlignCenter)
-            frame_layout.addWidget(title)
+            wtype = cfg.get("widget_type")
+            title_widget_for_binding = None
+
+            # group_box와 tab_container는 자체적으로 제목을 표시하므로,
+            # 중복되는 외부 라벨을 생성하지 않습니다.
+            if wtype not in ("group_box", "tab_container"):
+                behavior = str(cfg.get("behavior", "none")).upper()
+                title = QLabel(f"[{behavior}] {cfg.get('title', 'Widget')}")
+                # 라벨이 수직으로 늘어나는 것을 방지하고 컨트롤 위젯이 공간을 차지하도록 합니다.
+                title.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+                title_align_str = str(cfg.get("title_align", "center")).lower()
+                if title_align_str == "left":
+                    align_flag = Qt.AlignLeft | Qt.AlignVCenter
+                elif title_align_str == "right":
+                    align_flag = Qt.AlignRight | Qt.AlignVCenter
+                else:
+                    align_flag = Qt.AlignCenter
+                title.setAlignment(align_flag)
+                frame_layout.addWidget(title)
+                title_widget_for_binding = title
 
             ctrl, child_host = self._create_runtime_widget(cfg)
-            frame_layout.addWidget(ctrl, 0, Qt.AlignLeft | Qt.AlignTop)
+            # Stretch factor 1 allows the control to expand and fill available vertical space.
+            frame_layout.addWidget(ctrl, 1)
 
             wid = cfg.get("id")
             self.widget_frames[wid] = frame
@@ -932,7 +989,8 @@ class UserPanelWindow(QWidget):
             self.widget_child_hosts[wid] = child_host
 
             self._bind_select(frame, wid)
-            self._bind_select(title, wid)
+            if title_widget_for_binding:
+                self._bind_select(title_widget_for_binding, wid)
 
         for cfg in sorted_cfg:
             wid = cfg.get("id")
@@ -985,13 +1043,23 @@ class UserPanelWindow(QWidget):
                 widget.setCursor(Qt.OpenHandCursor)
 
         def _on_press(event):
+            # RUN/STANDBY 모드에서는 위젯을 클릭해도 선택되지 않습니다.
+            if self.mode != "edit":
+                return
+
             self.selected_widget_id = widget_id
             self._refresh_selection_ui()
 
-            if self.mode == "edit" and self.draw_mode is None and event is not None and event.button() == Qt.LeftButton:
+            if self.draw_mode is None and event is not None and event.button() == Qt.LeftButton:
                 try:
                     self._drag_target_id = widget_id
                     self._drag_start_global = event.globalPos()
+
+                    # 드래그 대상인 전체 프레임(widget_frames[widget_id])을 기준으로 오프셋을 계산합니다.
+                    # 이렇게 하면 제목 라벨이나 다른 내부 위젯 중 어느 것을 클릭해도
+                    # 항상 전체 프레임의 좌상단을 기준으로 상대 위치가 유지됩니다.
+                    frame_widget = self.widget_frames.get(widget_id)
+                    self._drag_offset_global = event.globalPos() - frame_widget.mapToGlobal(QPoint(0, 0))
                     self._drag_origin_parent = self._get_selected_config().get("parent_id") if self._get_selected_config() else None
                     cfg = self._get_selected_config()
                     if cfg:
@@ -1005,6 +1073,7 @@ class UserPanelWindow(QWidget):
                 except Exception:
                     self._drag_target_id = None
                     self._drag_start_global = None
+                    self._drag_offset_global = None
                     self._drag_origin_cell = None
                     self._drag_origin_span = None
                     self._drag_resize_mode = False
@@ -1035,15 +1104,12 @@ class UserPanelWindow(QWidget):
                 preview_col_span = max(1, c_end - c_start + 1)
                 self._show_drag_preview(cfg, preview_row_span, preview_col_span, resize_mode=True)
             else:
-                delta_x = int(end_pos.x() - self._drag_start_global.x())
-                delta_y = int(end_pos.y() - self._drag_start_global.y())
-                cell_w = max(1.0, float(self.canvas.width()) / max(1, self.grid_cols))
-                cell_h = max(1.0, float(self.canvas.height()) / max(1, self.grid_rows))
-                dcol = int(round(delta_x / cell_w))
-                drow = int(round(delta_y / cell_h))
-                preview_row = max(0, min(self.grid_rows - 1, int(self._drag_origin_cell[0]) + drow))
-                preview_col = max(0, min(self.grid_cols - 1, int(self._drag_origin_cell[1]) + dcol))
                 new_parent = self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
+                # 위젯의 좌상단이 위치할 목표 지점을 오프셋을 적용하여 계산합니다.
+                adjusted_pos = end_pos
+                if self._drag_offset_global:
+                    adjusted_pos -= self._drag_offset_global
+                preview_row, preview_col = self._cell_from_global_in_parent(new_parent, adjusted_pos)
                 self._show_drag_preview(cfg, preview_row, preview_col, parent_id=new_parent, resize_mode=False)
 
         def _on_release(event):
@@ -1059,6 +1125,10 @@ class UserPanelWindow(QWidget):
             try:
                 end_pos = event.globalPos()
 
+                # 마우스가 거의 움직이지 않았다면(클릭), 드래그로 처리하지 않고 종료합니다.
+                if (end_pos - self._drag_start_global).manhattanLength() < QApplication.startDragDistance():
+                    return
+
                 cfg = self._get_selected_config()
                 if not cfg:
                     return
@@ -1068,29 +1138,29 @@ class UserPanelWindow(QWidget):
                     r_end, c_end = self._cell_from_global_in_parent(parent_id, end_pos)
                     r_start = int(cfg.get("row", 0))
                     c_start = int(cfg.get("col", 0))
-                    cfg["row_span"] = max(1, r_end - r_start + 1)
-                    cfg["col_span"] = max(1, c_end - c_start + 1)
+
+                    wtype = cfg.get("widget_type")
+                    min_row_span = 1 if wtype == "shape_line" else 3
+                    min_col_span = 1 if wtype == "shape_line" else 4
+                    cfg["row_span"] = max(min_row_span, r_end - r_start + 1)
+                    cfg["col_span"] = max(min_col_span, c_end - c_start + 1)
                     self.rebuild_grid()
                 else:
-                    delta_x = int(end_pos.x() - self._drag_start_global.x())
-                    delta_y = int(end_pos.y() - self._drag_start_global.y())
-                    cell_w = max(1.0, float(self.canvas.width()) / max(1, self.grid_cols))
-                    cell_h = max(1.0, float(self.canvas.height()) / max(1, self.grid_rows))
-                    dcol = int(round(delta_x / cell_w))
-                    drow = int(round(delta_y / cell_h))
-                    old_parent = cfg.get("parent_id")
                     new_parent = self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
+                    # 최종 위치를 오프셋을 적용하여 계산합니다.
+                    adjusted_pos = end_pos
+                    if self._drag_offset_global:
+                        adjusted_pos -= self._drag_offset_global
+                    row_new, col_new = self._cell_from_global_in_parent(new_parent, adjusted_pos)
+
                     cfg["parent_id"] = new_parent
-
-                    if drow != 0 or dcol != 0 or old_parent != new_parent:
-                        row_new, col_new = self._cell_from_global_in_parent(new_parent, end_pos)
-                        cfg["row"] = row_new
-                        cfg["col"] = col_new
-
+                    cfg["row"] = row_new
+                    cfg["col"] = col_new
                     self.rebuild_grid()
             finally:
                 self._drag_target_id = None
                 self._drag_start_global = None
+                self._drag_offset_global = None
                 self._drag_origin_cell = None
                 self._drag_origin_span = None
                 self._drag_origin_parent = None
@@ -1139,6 +1209,7 @@ class UserPanelWindow(QWidget):
 
         if wtype == "button":
             btn = QPushButton("Send")
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             push_value = float(binding.get("tx_press_value", max_v))
             pull_value = float(binding.get("tx_release_value", min_v))
             hold_period_ms = int(binding.get("tx_hold_period_ms", 80))
@@ -1163,6 +1234,7 @@ class UserPanelWindow(QWidget):
         if wtype == "toggle":
             btn = QPushButton("OFF")
             btn.setCheckable(True)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             on_value = float(binding.get("tx_on_value", max_v))
             off_value = float(binding.get("tx_off_value", min_v))
 
@@ -1184,7 +1256,7 @@ class UserPanelWindow(QWidget):
             value_label = QLabel(f"{min_v:.3f}")
             value_label.setObjectName("value_label")
             value_label.setAlignment(Qt.AlignCenter)
-            lay.addWidget(slider)
+            lay.addWidget(slider, 1)
             lay.addWidget(value_label)
 
             def _on_changed(v):
@@ -1199,6 +1271,7 @@ class UserPanelWindow(QWidget):
 
         if wtype == "spinbox":
             spin = QDoubleSpinBox()
+            spin.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
             spin.setRange(min_v, max_v)
             step = float(binding.get("tx_resolution", max((max_v - min_v) / 100.0, 0.001)))
             step = max(step, 0.000001)
@@ -1210,6 +1283,7 @@ class UserPanelWindow(QWidget):
 
         if wtype == "progress":
             bar = QProgressBar()
+            bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
             bar.setRange(0, 1000)
             bar.setValue(0)
             return bar, None
@@ -1227,9 +1301,13 @@ class UserPanelWindow(QWidget):
             inner_layout.setContentsMargins(4, 4, 4, 4)
             inner_layout.setHorizontalSpacing(4)
             inner_layout.setVerticalSpacing(4)
+            for r in range(self.grid_rows):
+                inner_layout.setRowStretch(r, 1)
+            for c in range(self.grid_cols):
+                inner_layout.setColumnStretch(c, 1)
             grp_lay = QVBoxLayout(grp)
             grp_lay.setContentsMargins(6, 6, 6, 6)
-            grp_lay.addWidget(inner)
+            grp_lay.addWidget(inner, 1)
             return grp, inner_layout
 
         if wtype == "tab_container":
@@ -1239,6 +1317,10 @@ class UserPanelWindow(QWidget):
             tab1_layout.setContentsMargins(4, 4, 4, 4)
             tab1_layout.setHorizontalSpacing(4)
             tab1_layout.setVerticalSpacing(4)
+            for r in range(self.grid_rows):
+                tab1_layout.setRowStretch(r, 1)
+            for c in range(self.grid_cols):
+                tab1_layout.setColumnStretch(c, 1)
             tabs.addTab(tab1, "Tab 1")
             tabs.addTab(QWidget(), "Tab 2")
             return tabs, tab1_layout
@@ -1277,8 +1359,9 @@ class UserPanelWindow(QWidget):
 
         return QLabel("-"), None
 
-    def _preview_parent_widget(self, cfg):
-        parent_id = cfg.get("parent_id")
+    def _preview_parent_widget(self, cfg, parent_id=None):
+        target_parent_id = cfg.get("parent_id") if parent_id is None else parent_id
+        parent_id = target_parent_id
         if parent_id and parent_id in self.widget_child_hosts and self.widget_child_hosts[parent_id] is not None:
             host_layout = self.widget_child_hosts[parent_id]
             host_widget = host_layout.parentWidget()
@@ -1287,7 +1370,7 @@ class UserPanelWindow(QWidget):
         return self.canvas
 
     def _show_drag_preview(self, cfg, row_or_span, col_or_span, parent_id=None, resize_mode=False):
-        parent_widget = self._preview_parent_widget(cfg)
+        parent_widget = self._preview_parent_widget(cfg, parent_id=parent_id)
         if parent_widget is None:
             return
 
@@ -1308,8 +1391,10 @@ class UserPanelWindow(QWidget):
         cell_h = float(parent_h) / max(1, self.grid_rows)
         x = int(round(col * cell_w))
         y = int(round(row * cell_h))
-        w = max(1, int(round(col_span * cell_w)))
-        h = max(1, int(round(row_span * cell_h)))
+        x2 = int(round((col + col_span) * cell_w))
+        y2 = int(round((row + row_span) * cell_h))
+        w = max(1, x2 - x)
+        h = max(1, y2 - y)
 
         if self._drag_preview_band is None or self._drag_preview_band.parent() is not parent_widget:
             self._hide_drag_preview()
@@ -1380,10 +1465,14 @@ class UserPanelWindow(QWidget):
         if not cfg:
             return
 
+        wtype = cfg.get("widget_type")
+        min_row_span = 1 if wtype == "shape_line" else 3
+        min_col_span = 1 if wtype == "shape_line" else 4
+
         col_span = int(cfg.get("col_span", 1)) + int(dcol_span)
         row_span = int(cfg.get("row_span", 1)) + int(drow_span)
-        cfg["col_span"] = max(1, min(self.grid_cols, col_span))
-        cfg["row_span"] = max(1, min(self.grid_rows, row_span))
+        cfg["col_span"] = max(min_col_span, min(self.grid_cols, col_span))
+        cfg["row_span"] = max(min_row_span, min(self.grid_rows, row_span))
         self.rebuild_grid()
 
     def check_tx_overlap(self):
@@ -1521,6 +1610,7 @@ class UserPanelWindow(QWidget):
             return
         self._tx_armed = True
         binding = cfg.get("binding", {})
+        frame_key = self._frame_key_from_binding(binding)
         cycle_mode = str(binding.get("tx_cycle_mode", "immediate"))
         if cycle_mode == "immediate":
             self.request_tx_value.emit(binding, float(value))
@@ -1534,6 +1624,7 @@ class UserPanelWindow(QWidget):
 
         try:
             self.main_window.stage_user_panel_value(binding, float(value))
+            self._armed_frame_keys.add(frame_key)
         except Exception as e:
             if hasattr(self.main_window, "statusBar"):
                 self.main_window.statusBar().showMessage(f"User panel TX stage failed: {e}", 4000)
@@ -1623,6 +1714,9 @@ class UserPanelWindow(QWidget):
         if not self._tx_armed:
             self._stop_all_frame_timers()
             return
+        if not self._armed_frame_keys:
+            self._stop_all_frame_timers()
+            return
 
         keys = set()
         for cfg in self.widgets_config:
@@ -1630,6 +1724,8 @@ class UserPanelWindow(QWidget):
                 continue
             binding = cfg.get("binding", {})
             key = self._frame_key_from_binding(binding)
+            if key not in self._armed_frame_keys:
+                continue
             cycle = self._compute_frame_cycle_ms(key)
             if cycle is not None:
                 keys.add((key, cycle))

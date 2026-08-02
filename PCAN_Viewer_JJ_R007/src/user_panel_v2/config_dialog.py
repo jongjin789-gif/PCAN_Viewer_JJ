@@ -31,6 +31,8 @@ class WidgetConfigDialog(QDialog):
         fixed_behavior=None,
         parent_candidates=None,
         live_preview_default=True,
+        grid_rows=24,
+        grid_cols=24,
     ):
         super().__init__(parent)
         self.setWindowTitle("User Widget Config")
@@ -39,6 +41,8 @@ class WidgetConfigDialog(QDialog):
         self.fixed_behavior = fixed_behavior
         self.parent_candidates = parent_candidates or []
         self.live_preview_default = bool(live_preview_default)
+        self.grid_rows = max(1, int(grid_rows))
+        self.grid_cols = max(1, int(grid_cols))
         self._config_id = str(uuid.uuid4())
         self._enum_entries = []
 
@@ -80,14 +84,21 @@ class WidgetConfigDialog(QDialog):
         self.edit_title = QLineEdit("Widget")
         form_tool.addRow("Title", self.edit_title)
 
+        self.combo_title_align = QComboBox()
+        self.combo_title_align.addItems(["Left", "Center", "Right"])
+        self.combo_title_align.setCurrentText("Center")
+        form_tool.addRow("Title Align", self.combo_title_align)
+
         self.spin_row = QSpinBox()
-        self.spin_row.setRange(0, 23)
+        self.spin_row.setRange(0, self.grid_rows - 1)
         self.spin_col = QSpinBox()
-        self.spin_col.setRange(0, 23)
+        self.spin_col.setRange(0, self.grid_cols - 1)
         self.spin_row_span = QSpinBox()
-        self.spin_row_span.setRange(1, 12)
+        self.spin_row_span.setRange(1, self.grid_rows)
+        self.spin_row_span.setValue(3)
         self.spin_col_span = QSpinBox()
-        self.spin_col_span.setRange(1, 12)
+        self.spin_col_span.setRange(1, self.grid_cols)
+        self.spin_col_span.setValue(4)
         form_tool.addRow("Row", self.spin_row)
         form_tool.addRow("Col", self.spin_col)
         form_tool.addRow("Row Span", self.spin_row_span)
@@ -109,6 +120,12 @@ class WidgetConfigDialog(QDialog):
             self.combo_behavior.setEnabled(False)
         form_tool.addRow("Behavior", self.combo_behavior)
         self.combo_behavior.currentIndexChanged.connect(self._refresh_widget_types)
+
+        self.combo_value_precision = QComboBox()
+        self.combo_value_precision.addItem("3 decimals (default)", 3)
+        self.combo_value_precision.addItem("6 decimals (high precision)", 6)
+        form_tool.addRow("Value Precision", self.combo_value_precision)
+        self.combo_value_precision.currentIndexChanged.connect(self._on_precision_changed)
 
         self.combo_bus = QComboBox()
         self.combo_bus.addItems(["1", "2", "3"])
@@ -340,8 +357,10 @@ class WidgetConfigDialog(QDialog):
         compact_widgets = [
             self.combo_widget_type,
             self.edit_title,
+            self.combo_title_align,
             self.combo_parent_tool,
             self.combo_behavior,
+            self.combo_value_precision,
             self.combo_bus,
             self.combo_message,
             self.combo_signal,
@@ -404,6 +423,8 @@ class WidgetConfigDialog(QDialog):
         watchers = [
             self.combo_widget_type,
             self.combo_behavior,
+            self.combo_title_align,
+            self.combo_value_precision,
             self.combo_bus,
             self.combo_message,
             self.combo_signal,
@@ -464,10 +485,42 @@ class WidgetConfigDialog(QDialog):
         self.chk_big_endian.toggled.connect(self._on_any_changed)
         self.chk_fill.toggled.connect(self._on_any_changed)
 
+        self._apply_precision_setting()
         self._update_visibility()
 
     def _register_row(self, form, field_widget):
         self._row_handles[field_widget] = (form, field_widget)
+
+    def _precision_decimals(self):
+        value = self.combo_value_precision.currentData()
+        if value in (3, 6):
+            return int(value)
+        return 3
+
+    def _apply_precision_setting(self):
+        decimals = self._precision_decimals()
+        for spin in (
+            self.spin_scale,
+            self.spin_offset,
+            self.spin_min,
+            self.spin_max,
+            self.spin_press_value,
+            self.spin_release_value,
+            self.spin_toggle_on_value,
+            self.spin_toggle_off_value,
+            self.spin_rx_on_a,
+            self.spin_rx_on_b,
+            self.spin_rx_off_a,
+            self.spin_rx_off_b,
+        ):
+            spin.setDecimals(decimals)
+
+    def _round_value(self, value):
+        return round(float(value), self._precision_decimals())
+
+    def _on_precision_changed(self, *_args):
+        self._apply_precision_setting()
+        self._on_any_changed()
 
     def _widget_type_options(self):
         behavior = self.fixed_behavior or self.combo_behavior.currentText() or "none"
@@ -511,6 +564,16 @@ class WidgetConfigDialog(QDialog):
         wtype = self.combo_widget_type.currentText()
         behavior = self.combo_behavior.currentText()
         has_enum = self._has_enum_choices()
+
+        # 위젯이 너무 작아져 레이아웃이 깨지는 현상을 방지하기 위해 최소 크기를 제한합니다.
+        # 단, 한 줄 짜리 선(shape_line)은 예외적으로 1의 크기를 가질 수 있습니다.
+        if wtype == "shape_line":
+            self.spin_row_span.setMinimum(1)
+            self.spin_col_span.setMinimum(1)
+        else:
+            # 대부분의 위젯은 최소 3x4의 크기를 갖도록 하여 안정적인 레이아웃을 보장합니다.
+            self.spin_row_span.setMinimum(3)
+            self.spin_col_span.setMinimum(4)
 
         is_shape = wtype in ("shape_line", "shape_rect")
         is_group_container = wtype in ("group_box", "tab_container")
@@ -670,7 +733,7 @@ class WidgetConfigDialog(QDialog):
         scale_txt = f"{abs(scale):.8f}".rstrip("0")
         decimals = 0
         if "." in scale_txt:
-            decimals = min(3, len(scale_txt.split(".", 1)[1]))
+            decimals = min(self._precision_decimals(), len(scale_txt.split(".", 1)[1]))
 
         self.spin_min.setValue(min_v)
         self.spin_max.setValue(max_v)
@@ -818,6 +881,7 @@ class WidgetConfigDialog(QDialog):
             "id": self._config_id,
             "widget_type": self.combo_widget_type.currentText(),
             "title": self.edit_title.text().strip() or "Widget",
+            "title_align": self.combo_title_align.currentText().lower(),
             "row": int(self.spin_row.value()),
             "col": int(self.spin_col.value()),
             "row_span": int(self.spin_row_span.value()),
@@ -832,25 +896,26 @@ class WidgetConfigDialog(QDialog):
                 "dlc": int(self.spin_dlc.value()),
                 "start_bit": int(self.spin_start_bit.value()),
                 "bit_length": int(self.spin_bit_length.value()),
-                "scale": round(float(self.spin_scale.value()), 3),
-                "offset": round(float(self.spin_offset.value()), 3),
+                "value_precision_decimals": self._precision_decimals(),
+                "scale": self._round_value(self.spin_scale.value()),
+                "offset": self._round_value(self.spin_offset.value()),
                 "signed": bool(self.chk_signed.isChecked()),
                 "byte_order": "big_endian" if self.chk_big_endian.isChecked() else "little_endian",
-                "min": round(min_v, 3),
-                "max": round(max_v, 3),
+                "min": self._round_value(min_v),
+                "max": self._round_value(max_v),
                 "tx_resolution": float(self.spin_resolution.value()),
                 "tx_cycle_mode": self.combo_tx_cycle_mode.currentText(),
                 "tx_cycle_ms": int(self.spin_tx_cycle_ms.value()),
-                "tx_press_value": round(self._value_from_editor(self.spin_press_value, self.combo_press_enum), 3),
-                "tx_release_value": round(self._value_from_editor(self.spin_release_value, self.combo_release_enum), 3),
-                "tx_on_value": round(self._value_from_editor(self.spin_toggle_on_value, self.combo_toggle_on_enum), 3),
-                "tx_off_value": round(self._value_from_editor(self.spin_toggle_off_value, self.combo_toggle_off_enum), 3),
+                "tx_press_value": self._round_value(self._value_from_editor(self.spin_press_value, self.combo_press_enum)),
+                "tx_release_value": self._round_value(self._value_from_editor(self.spin_release_value, self.combo_release_enum)),
+                "tx_on_value": self._round_value(self._value_from_editor(self.spin_toggle_on_value, self.combo_toggle_on_enum)),
+                "tx_off_value": self._round_value(self._value_from_editor(self.spin_toggle_off_value, self.combo_toggle_off_enum)),
                 "rx_on_op": self.combo_rx_on_op.currentText(),
-                "rx_on_a": round(float(self.spin_rx_on_a.value()), 3),
-                "rx_on_b": round(float(self.spin_rx_on_b.value()), 3),
+                "rx_on_a": self._round_value(self.spin_rx_on_a.value()),
+                "rx_on_b": self._round_value(self.spin_rx_on_b.value()),
                 "rx_off_op": self.combo_rx_off_op.currentText(),
-                "rx_off_a": round(float(self.spin_rx_off_a.value()), 3),
-                "rx_off_b": round(float(self.spin_rx_off_b.value()), 3),
+                "rx_off_a": self._round_value(self.spin_rx_off_a.value()),
+                "rx_off_b": self._round_value(self.spin_rx_off_b.value()),
                 "shape_kind": self.combo_shape_kind.currentText(),
                 "shape_line_direction": self.combo_shape_line_dir.currentText(),
                 "stroke_color": (self.edit_stroke_color.text() or "#333333").strip(),
@@ -877,9 +942,15 @@ class WidgetConfigDialog(QDialog):
             self.combo_parent_tool.setCurrentIndex(0)
         self.combo_behavior.setCurrentText(config.get("behavior", "none"))
         self._refresh_widget_types()
+        self.combo_title_align.setCurrentText(str(config.get("title_align", "center")).capitalize())
         self.combo_widget_type.setCurrentText(config.get("widget_type", self.combo_widget_type.currentText()))
 
         binding = config.get("binding", {})
+        precision_decimals = int(binding.get("value_precision_decimals", 3) or 3)
+        idx_precision = self.combo_value_precision.findData(precision_decimals)
+        self.combo_value_precision.setCurrentIndex(idx_precision if idx_precision >= 0 else 0)
+        self._apply_precision_setting()
+
         self.combo_bus.setCurrentText(str(binding.get("bus", 1)))
         self._load_db_messages()
 
