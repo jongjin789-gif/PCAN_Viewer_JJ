@@ -45,6 +45,7 @@ class UniversalCANMonitor(QMainWindow):
         self.log_viewers = [] # [LogViewerWindow, ...]
         self.user_panel_window = None
         self.user_tx_cache = {}
+        self.user_frame_properties = {} # User Panel 프레임 속성(BRS 등) 캐시
         
         self.init_ui()
         if not self.viewer_only:
@@ -556,6 +557,14 @@ class UniversalCANMonitor(QMainWindow):
 
         payload = self._pack_signal_to_payload(payload, binding, phys_value)
         self.user_tx_cache[key] = bytes(payload)
+
+        # BRS와 같은 프레임 레벨 속성을 캐시에 저장합니다.
+        # 여러 도구가 동일 프레임에 다른 BRS 설정을 가질 경우, 마지막에 업데이트한 도구의 설정이 적용됩니다.
+        is_brs = bool(binding.get("brs", False))
+        if key not in self.user_frame_properties:
+            self.user_frame_properties[key] = {}
+        self.user_frame_properties[key]['brs'] = is_brs
+
         return bus_num, can_id, dlc, key
 
     def flush_user_panel_frame(self, bus_num, can_id, dlc):
@@ -568,7 +577,11 @@ class UniversalCANMonitor(QMainWindow):
         if bus_obj is None:
             raise RuntimeError(f"Bus {bus_num} is not connected.")
 
-        is_fd = dlc > 8
+        # 프레임 속성 캐시에서 BRS 설정값을 가져옵니다.
+        frame_props = self.user_frame_properties.get(key, {})
+        is_brs = frame_props.get('brs', False)
+
+        is_fd = dlc > 8 or is_brs
         if is_fd and not self.bus_capabilities[int(bus_num)].get('is_fd', False):
             raise RuntimeError(f"Bus {bus_num} does not support FD payload length {dlc}.")
 
@@ -577,7 +590,7 @@ class UniversalCANMonitor(QMainWindow):
             data=payload,
             is_extended_id=(int(can_id) > 0x7FF),
             is_fd=is_fd,
-            bitrate_switch=False
+            bitrate_switch=is_brs
         )
         bus_obj.send(msg)
         self.record_tx_activity(int(bus_num), int(can_id), payload, is_fd)
@@ -1098,7 +1111,7 @@ class UniversalCANMonitor(QMainWindow):
             
             # 2. cantools가 인식하지 못하는 전용 메타데이터 라인 자동 주석화
             # 예: Title="Untitled", Version=1.0, Author=... 등
-            if lower_stripped.startswith(('title=', 'version=', 'author=', 'date=', 'description=')):
+            if lower_stripped.startswith(('title=', 'version=', 'author=', 'date=', 'description=', 'brs=')):
                 lines[i] = '// ' + line
                 
         cleaned_content = '\n'.join(lines)
@@ -1177,7 +1190,7 @@ class UniversalCANMonitor(QMainWindow):
 
             # 3. cantools가 인식하지 못하는 전용 메타데이터 라인 자동 주석화
             # 예: Title="Untitled", Version=1.0, Author=... 등
-            if lower_stripped.startswith(('title=', 'version=', 'author=', 'date=', 'description=')):
+            if lower_stripped.startswith(('title=', 'version=', 'author=', 'date=', 'description=', 'brs=')):
                 lines[i] = '// ' + line
                 continue
 

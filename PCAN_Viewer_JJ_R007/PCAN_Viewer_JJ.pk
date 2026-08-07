@@ -40,7 +40,7 @@
             ],
             "cycle": 0,
             "note": "!1. MOT STEP 0x06",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -59,7 +59,7 @@
             ],
             "cycle": 0,
             "note": "!2. MOT STEP 0x07",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -77,7 +77,7 @@
             ],
             "cycle": 0,
             "note": "!3. TORQUE MODE",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -98,7 +98,7 @@
             ],
             "cycle": 0,
             "note": "!4. Torque - Value",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -119,7 +119,7 @@
             ],
             "cycle": 0,
             "note": "!5. max speed (RPM)",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -138,7 +138,7 @@
             ],
             "cycle": 0,
             "note": "!6. MOT STEP 0x1F",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -159,7 +159,7 @@
             ],
             "cycle": 0,
             "note": "!7. HOME OFFSET",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -180,7 +180,7 @@
             ],
             "cycle": 0,
             "note": "!8. EEPROM",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -214,7 +214,7 @@
             ],
             "cycle": 0,
             "note": "#2.WATCH_DOG",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -247,7 +247,7 @@
             ],
             "cycle": 0,
             "note": "1. HOME MODE",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -266,7 +266,7 @@
             ],
             "cycle": 0,
             "note": "2. MOT STEP 0x06",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -285,7 +285,7 @@
             ],
             "cycle": 0,
             "note": "3. MOT STEP 0x07",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -304,7 +304,7 @@
             ],
             "cycle": 0,
             "note": "4. MOT STEP 0x0F",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -322,7 +322,7 @@
             ],
             "cycle": 0,
             "note": "5. HOME METHOD",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -341,7 +341,7 @@
             ],
             "cycle": 0,
             "note": "6. MOT STEP 0x1F",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -362,7 +362,7 @@
             ],
             "cycle": 0,
             "note": "7. HOME OFFSET",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -383,7 +383,7 @@
             ],
             "cycle": 0,
             "note": "8. EEPROM",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -402,7 +402,7 @@
             ],
             "cycle": 0,
             "note": "@1. MOT STEP 0x06",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -421,7 +421,7 @@
             ],
             "cycle": 0,
             "note": "@2. MOT STEP 0x07",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -439,7 +439,7 @@
             ],
             "cycle": 0,
             "note": "@3. POSITION MODE",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -458,7 +458,7 @@
             ],
             "cycle": 0,
             "note": "@4. MOT STEP 0x0F",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -477,7 +477,7 @@
             ],
             "cycle": 0,
             "note": "@5. MOT STEP 0x2F",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -498,7 +498,7 @@
             ],
             "cycle": 0,
             "note": "@6. Position",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -519,7 +519,7 @@
             ],
             "cycle": 0,
             "note": "@7. Velocity",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -538,7 +538,7 @@
             ],
             "cycle": 0,
             "note": "@8. MOT STEP 0x1F",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -557,7 +557,7 @@
             ],
             "cycle": 0,
             "note": "@9. EMO STOP 0x0B",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         },
@@ -576,40 +576,41 @@
             ],
             "cycle": 0,
             "note": "_MAX TORQUE SET",
-            "symbol": "Velocity",
+            "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
         }
     ],
     "db_files": {
         "1": [
-            "D:/COMPANY/GitHub/PJJ_Project/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/RT3000 DBC_260422_3.sym",
-            "D:/COMPANY/GitHub/PJJ_Project/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/VCU_CAN1_R22_20260312_1.sym",
-            "D:/COMPANY/GitHub/PJJ_Project/PCAN_Viewer_JJ/PCAN_Viewer_JJ_R007/dist/sample file/WheelVector_LoadSensor_2.sym"
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN1_operakit(V2)_Ver_1_0.sym"
         ],
         "2": [],
-        "3": []
+        "3": [
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN3_ACC_BRK_Pedal_V101.sym",
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN3_Ioniq5_Steer_20260701.sym"
+        ]
     },
     "can_config": {
         "1": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB Pro FD (0x52) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
-            "is_open": false
+            "data_bitrate": "2 MBit/s",
+            "is_open": true
         },
         "2": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB Pro FD (0x52) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
+            "data_bitrate": "Off",
             "is_open": false
         },
         "3": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB Pro FD (0x52) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
+            "data_bitrate": "Off",
             "is_open": false
         }
     }

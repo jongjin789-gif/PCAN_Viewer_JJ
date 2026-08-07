@@ -61,12 +61,16 @@ class TxPacketDialog(QDialog):
         self.combo_type = QComboBox()
         self.combo_type.addItems(["Classic", "FD"])
         self.combo_type.currentIndexChanged.connect(self.on_type_changed)
+
+        self.check_brs = QCheckBox("BRS")
+        self.check_brs.setToolTip("Enable Bitrate Switch for CAN FD")
         
         self.combo_length = QComboBox()
         self.combo_length.currentIndexChanged.connect(self.on_length_changed)
         
         type_len_layout.addWidget(QLabel("Type:"))
         type_len_layout.addWidget(self.combo_type)
+        type_len_layout.addWidget(self.check_brs)
         type_len_layout.addWidget(QLabel("Length:"))
         type_len_layout.addWidget(self.combo_length)
         type_len_layout.addStretch()
@@ -301,10 +305,13 @@ class TxPacketDialog(QDialog):
         if self.combo_type.currentText() == "Classic":
             lengths = [str(i) for i in range(9) if i >= min_len]
             self.combo_length.addItems(lengths)
+            self.check_brs.setEnabled(False)
+            self.check_brs.setChecked(False)
         else:
             fd_lens = [i for i in range(9)] + [12, 16, 20, 24, 32, 48, 64]
             lengths = [str(l) for l in fd_lens if l >= min_len]
             self.combo_length.addItems(lengths)
+            self.check_brs.setEnabled(True)
             
         idx = self.combo_length.findText(current_len)
         if idx >= 0: self.combo_length.setCurrentIndex(idx)
@@ -508,6 +515,7 @@ class TxPacketDialog(QDialog):
         can_id_text = self.edit_id.text().strip()
         can_id = int(can_id_text, 16) if can_id_text else 0
         is_fd = (self.combo_type.currentText() == "FD")
+        is_brs = self.check_brs.isChecked() if is_fd else False
         total_length = int(self.combo_length.currentText()) if self.combo_length.currentText() else 0
         
         data_text = self.edit_data.text().replace(" ", "")
@@ -528,7 +536,7 @@ class TxPacketDialog(QDialog):
         symbol = "N/A" if "Direct Input" in symbol else symbol.split(" (")[0]
             
         return {
-            "bus": bus_num, "id": can_id, "is_fd": is_fd, "length": total_length,
+            "bus": bus_num, "id": can_id, "is_fd": is_fd, "is_brs": is_brs, "length": total_length,
             "data": full_data, "cycle": self.edit_cycle.value(),
             "note": self.edit_note.text().strip(), "symbol": symbol, "count": 0, "crc_type": crc_type
         }
@@ -605,9 +613,14 @@ class TxPacketDialog(QDialog):
             self.table_signals.setRowCount(0)
             
         # 3. Type 및 Length
-        self.combo_type.setCurrentText("FD" if data["is_fd"] else "Classic")
+        is_fd = data.get("is_fd", False)
+        self.combo_type.setCurrentText("FD" if is_fd else "Classic")
+        is_brs = data.get("is_brs", False)
+        self.check_brs.setChecked(is_brs)
+        self.check_brs.setEnabled(is_fd)
+
         self.combo_length.clear()
-        if data["is_fd"]:
+        if is_fd:
             self.combo_length.addItems([str(i) for i in range(9)] + ["12", "16", "20", "24", "32", "48", "64"])
         else:
             self.combo_length.addItems([str(i) for i in range(9)])
@@ -649,13 +662,14 @@ class TxPacketItem(SortableTreeWidgetItem):
         can_id_str = f"{d['id']:03X}h" if d['id'] <= 0x7FF else f"{d['id']:X}h"
         self.setText(1, can_id_str)
         self.setText(2, "FD" if d["is_fd"] else "Classic")
-        self.setText(3, str(d["length"]))
-        self.setText(4, d.get("crc_type", "N/A"))
-        self.setText(5, d["symbol"])
-        self.setText(6, " ".join(f"{b:02X}" for b in d["data"]))
-        self.setText(7, str(d["cycle"]))
-        self.setText(8, str(d["count"]))
-        self.setText(9, d["note"])
+        self.setText(3, "On" if d.get("is_brs", False) else "Off")
+        self.setText(4, str(d["length"]))
+        self.setText(5, d.get("crc_type", "N/A"))
+        self.setText(6, d["symbol"])
+        self.setText(7, " ".join(f"{b:02X}" for b in d["data"]))
+        self.setText(8, str(d["cycle"]))
+        self.setText(9, str(d["count"]))
+        self.setText(10, d["note"])
         
     def send_packet(self):
         bus_obj = self.tx_panel.buses.get(self.packet_data["bus"])
@@ -707,7 +721,7 @@ class TxPacketItem(SortableTreeWidgetItem):
                 msg = can.Message(
                     arbitration_id=can_id, data=final_data,
                     is_extended_id=(can_id > 0x7FF), is_fd=d["is_fd"], 
-                    bitrate_switch=False # BRS는 현재 UI에서 제어 불가하므로 False로 고정
+                    bitrate_switch=d.get("is_brs", False)
                 )
                 bus_obj.send(msg)
 
@@ -769,6 +783,7 @@ class TxPanel(QWidget):
         self.btn_clear_all.clicked.connect(self.on_clear_all_packets)
         
         self.toolbar.addWidget(self.btn_add)
+        self.toolbar.addSpacing(20)
         self.toolbar.addWidget(self.btn_load)
         self.toolbar.addWidget(self.btn_save)
         self.toolbar.addStretch()
@@ -776,18 +791,19 @@ class TxPanel(QWidget):
         layout.addLayout(self.toolbar)
         
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["CAN BUS", "CAN ID", "CAN Type", "Data Length", "Packet Type", "dbc Symbol", "Data", "Cycle Time", "Count", "Note", "Action"])
+        self.tree.setHeaderLabels(["CAN BUS", "CAN ID", "CAN Type", "BRS", "Data Length", "Packet Type", "dbc Symbol", "Data", "Cycle Time", "Count", "Note", "Action"])
         self.tree.setColumnWidth(0, 70)
         self.tree.setColumnWidth(1, 80)
         self.tree.setColumnWidth(2, 70)
-        self.tree.setColumnWidth(3, 80)
-        self.tree.setColumnWidth(4, 90)
-        self.tree.setColumnWidth(5, 110)
-        self.tree.setColumnWidth(6, 250)
-        self.tree.setColumnWidth(7, 80)
-        self.tree.setColumnWidth(8, 60)
-        self.tree.setColumnWidth(9, 110)
-        self.tree.setColumnWidth(10, 80)
+        self.tree.setColumnWidth(3, 40)
+        self.tree.setColumnWidth(4, 80)
+        self.tree.setColumnWidth(5, 90)
+        self.tree.setColumnWidth(6, 110)
+        self.tree.setColumnWidth(7, 250)
+        self.tree.setColumnWidth(8, 80)
+        self.tree.setColumnWidth(9, 60)
+        self.tree.setColumnWidth(10, 110)
+        self.tree.setColumnWidth(11, 80)
         self.tree.setSortingEnabled(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection) # 다중 선택 활성화
@@ -965,11 +981,11 @@ class TxPanel(QWidget):
 
             for sig in sorted_signals:
                 sig_item = SortableTreeWidgetItem(item)
-                sig_item.setText(5, sig.name)
+                sig_item.setText(6, sig.name)
                 val = decoded_vals.get(sig.name, "-")
                 
                 if val == "-":
-                    sig_item.setText(6, "-")
+                    sig_item.setText(7, "-")
                 else:
                     if getattr(sig, 'choices', None) and isinstance(val, (int, float)) and int(val) in sig.choices:
                         val_str = f"{sig.choices[int(val)]} ({val})"
@@ -981,7 +997,7 @@ class TxPanel(QWidget):
                         val_str = str(val)
                         
                     unit = getattr(sig, 'unit', "")
-                    sig_item.setText(6, f"{val_str} {unit}" if unit else val_str)
+                    sig_item.setText(7, f"{val_str} {unit}" if unit else val_str)
                 
         action_widget = QWidget()
         h_layout = QHBoxLayout(action_widget)
@@ -990,7 +1006,7 @@ class TxPanel(QWidget):
         btn_send.clicked.connect(lambda _, i=item, b=btn_send: self.on_action_clicked(i, b))
         h_layout.addWidget(btn_send)
         h_layout.addStretch()
-        self.tree.setItemWidget(item, 10, action_widget)
+        self.tree.setItemWidget(item, 11, action_widget)
         self._update_action_button(item)
         item.setExpanded(False) # 패킷 추가 시 기본적으로 접힌 상태로 시작
         
@@ -1037,11 +1053,11 @@ class TxPanel(QWidget):
 
                 for sig in sorted_signals:
                     sig_item = SortableTreeWidgetItem(item)
-                    sig_item.setText(5, sig.name)
+                    sig_item.setText(6, sig.name)
                     val = decoded_vals.get(sig.name, "-")
                     
                     if val == "-":
-                        sig_item.setText(6, "-")
+                        sig_item.setText(7, "-")
                     else:
                         if getattr(sig, 'choices', None) and isinstance(val, (int, float)) and int(val) in sig.choices:
                             val_str = f"{sig.choices[int(val)]} ({val})"
@@ -1052,7 +1068,7 @@ class TxPanel(QWidget):
                         else:
                             val_str = str(val)
                         unit = getattr(sig, 'unit', "")
-                        sig_item.setText(6, f"{val_str} {unit}" if unit else val_str)
+                        sig_item.setText(7, f"{val_str} {unit}" if unit else val_str)
             
             # 편집 후, 다이얼로그를 열기 전의 확장 상태를 그대로 복원합니다.
             item.setExpanded(is_expanded)
@@ -1083,7 +1099,7 @@ class TxPanel(QWidget):
         self._update_action_button(item)
                 
     def _update_action_button(self, item):
-        action_widget = self.tree.itemWidget(item, 10)
+        action_widget = self.tree.itemWidget(item, 11)
         if not action_widget: return
         btn = action_widget.findChild(QPushButton)
         if not btn: return
@@ -1139,8 +1155,12 @@ class TxPanel(QWidget):
             crc_type = d.get("crc_type", "N/A")
             crc_note = f"CRC={crc_type}" if crc_type != "N/A" else ""
 
-            final_note = f"{crc_note} {note}".strip() if crc_note or note else ""
+            is_brs = d.get("is_brs", False)
+            brs_note = "BRS=On" if is_brs else ""
 
+            all_notes = [note for note in (crc_note, brs_note, note) if note]
+            final_note = " ".join(all_notes)
+            
             status = "Paused" if not item.is_running and cycle > 0 else ""
             line = f" {bus}  {msg_id:<10}-  {cycle:<5}{total_length:<5}D {data_hex}"
             if status: line += f"  {status}"
@@ -1176,6 +1196,7 @@ class TxPanel(QWidget):
                 
                 note = ""
                 crc_type = "N/A"
+                is_brs = False
                 if ';' in line and not line.startswith(';'):
                     parts = line.split(';', 1)
                     line = parts[0].strip()
@@ -1189,6 +1210,10 @@ class TxPanel(QWidget):
                         else:
                             crc_type = crc_val
                         note = re.sub(r'\bCRC=\S+\b\s*?', '', note, 1).strip()
+
+                    if re.search(r'\bBRS=On\b', note, re.IGNORECASE):
+                        is_brs = True
+                        note = re.sub(r'\bBRS=On\b\s*?', '', note, re.IGNORECASE).strip()
                 elif line.startswith(';'): continue
                     
                 tokens = line.split()
@@ -1236,8 +1261,10 @@ class TxPanel(QWidget):
                 if bus_num in self.db_messages and can_id in self.db_messages[bus_num]:
                     symbol = self.db_messages[bus_num][can_id].name
                     
+                is_fd = length > 8 or is_brs
                 data = {
-                    "bus": bus_num, "id": can_id, "is_fd": length > 8, "length": length,
+                    "bus": bus_num, "id": can_id, "is_fd": is_fd, "is_brs": is_brs,
+                    "length": length,
                     "data": data_bytes, "cycle": cycle, "note": note, "symbol": symbol, "count": 0, "crc_type": crc_type
                 }
                 self.add_packet_to_tree(data)
@@ -1397,11 +1424,11 @@ class TxPanel(QWidget):
 
                     for sig in sorted_signals:
                         sig_item = SortableTreeWidgetItem(item)
-                        sig_item.setText(5, sig.name)
+                        sig_item.setText(6, sig.name)
                         val = decoded_vals.get(sig.name, "-")
                         
                         if val == "-":
-                            sig_item.setText(6, "-")
+                            sig_item.setText(7, "-")
                         else:
                             if getattr(sig, 'choices', None) and isinstance(val, (int, float)) and int(val) in sig.choices:
                                 val_str = f"{sig.choices[int(val)]} ({val})"
@@ -1412,7 +1439,7 @@ class TxPanel(QWidget):
                             else:
                                 val_str = str(val)
                             unit = getattr(sig, 'unit', "")
-                            sig_item.setText(6, f"{val_str} {unit}" if unit else val_str)
+                            sig_item.setText(7, f"{val_str} {unit}" if unit else val_str)
                 else:
                     d["symbol"] = "N/A"
                     item.update_ui()
