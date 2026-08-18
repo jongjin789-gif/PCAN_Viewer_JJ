@@ -23,24 +23,109 @@ RECOMMENDED_COLORS = [
     QColor(128, 128, 128), # Gray
 ]
 
-# Placeholder for existing FormulaDialog to avoid breaking imports
-# The actual implementation is not provided in the context.
 class FormulaDialog(QDialog):
     def __init__(self, formulas, legend_items, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Formula Editor")
-        # This is a placeholder implementation.
+        self.setMinimumWidth(500)
+
+        self.formulas = formulas if formulas else {}
+        self.legend_items = [item for item in legend_items if item not in ['Y1', 'Y2', 'Y3']]
+
+        self.init_ui()
+        self.load_formulas()
+
+    def init_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("FormulaDialog implementation is not available in the provided context."))
+
+        # Variable mapping info
+        info_box = QGroupBox("Variables")
+        info_layout = QVBoxLayout(info_box)
+        
+        # Create a scroll area for long lists of variables
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_layout = QFormLayout(scroll_content)
+        
+        for i, item in enumerate(self.legend_items):
+            scroll_layout.addRow(f"X{i+1}:", QLabel(item))
+        
+        scroll_area.setWidget(scroll_content)
+        scroll_area.setMinimumHeight(100)
+        scroll_area.setMaximumHeight(200)
+        info_layout.addWidget(scroll_area)
+        
+        info_layout.addWidget(QLabel("You can use variables X1, X2, ... in your formulas.\nSupported operations: +, -, *, /, ** (power), and parentheses ()."))
+        layout.addWidget(info_box)
+
+        # Formula editors
+        self.editors = {}
+        for y_name in ['Y1', 'Y2', 'Y3']:
+            group = QGroupBox(f"Formula for {y_name}")
+            group_layout = QFormLayout(group)
+            
+            chk_enabled = QCheckBox("Enabled")
+            edit_name = QLineEdit()
+            edit_expr = QLineEdit()
+            edit_unit = QLineEdit()
+            
+            group_layout.addRow(chk_enabled)
+            group_layout.addRow("Display Name:", edit_name)
+            group_layout.addRow("Expression:", edit_expr)
+            group_layout.addRow("Unit:", edit_unit)
+            
+            self.editors[y_name] = {
+                'enabled': chk_enabled,
+                'name': edit_name,
+                'expr': edit_expr,
+                'unit': edit_unit
+            }
+            layout.addWidget(group)
+
+        # Buttons
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("OK")
-        ok_btn.clicked.connect(self.accept)
-        btn_layout.addWidget(ok_btn)
+        self.btn_ok = QPushButton("OK")
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_ok.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_ok)
+        btn_layout.addWidget(self.btn_cancel)
         layout.addLayout(btn_layout)
-        self.formulas = formulas
+
+    def load_formulas(self):
+        for y_name, editor_group in self.editors.items():
+            if y_name in self.formulas:
+                data = self.formulas[y_name]
+                editor_group['enabled'].setChecked(data.get('enabled', False))
+                editor_group['name'].setText(data.get('name', ''))
+                editor_group['expr'].setText(data.get('expr', ''))
+                editor_group['unit'].setText(data.get('unit', ''))
 
     def get_formulas(self):
-        return self.formulas
+        new_formulas = {}
+        for y_name, editor_group in self.editors.items():
+            expr = editor_group['expr'].text().strip()
+            compiled = None
+            if expr:
+                try:
+                    # Basic validation: check if it can be compiled
+                    # The actual evaluation with variables happens in the graph window
+                    compiled = compile(expr, '<string>', 'eval')
+                except Exception as e:
+                    QMessageBox.warning(self, "Invalid Formula", f"Error in formula for {y_name}:\n{expr}\n\n{str(e)}")
+                    # To prevent crash, return original formulas
+                    return self.formulas
+
+            new_formulas[y_name] = {
+                'enabled': editor_group['enabled'].isChecked(),
+                'name': editor_group['name'].text().strip(),
+                'expr': expr,
+                'unit': editor_group['unit'].text().strip(),
+                'compiled': compiled
+            }
+        return new_formulas
 
 # New implementation for LabelEditorDialog and its helpers
 
