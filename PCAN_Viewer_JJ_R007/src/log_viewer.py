@@ -18,6 +18,8 @@ class LogViewerWindow(QMainWindow):
         self.db_messages = db_messages
         self.main_window = main_window
         self.active_graphs = []
+        self.synced_graphs_ordered = []
+        self.combined_view_window = None
         self.signal_data = {}
         self.signal_choices = {}
         self.raw_log_data = []
@@ -687,6 +689,32 @@ class LogViewerWindow(QMainWindow):
         self.active_graphs.append(graph)
         graph.show()
 
+    def handle_sync_toggle(self, graph_window, is_checked):
+        """그래프 창의 Sync 체크 상태 변경을 처리하여 순서가 있는 리스트를 관리합니다."""
+        if is_checked:
+            if graph_window not in self.synced_graphs_ordered:
+                self.synced_graphs_ordered.append(graph_window)
+        else:
+            if graph_window in self.synced_graphs_ordered:
+                self.synced_graphs_ordered.remove(graph_window)
+
+    def open_combined_view(self):
+        """동기화된 그래프들을 하나의 창에 모아보는 통합 뷰를 엽니다."""
+        from src.combined_graph_view import CombinedGraphView
+        if not self.synced_graphs_ordered:
+            QMessageBox.information(self, "정보", "통합 보기 기능을 사용하려면 먼저 동기화할 그래프를 1개 이상 선택해주세요.")
+            return
+
+        try:
+            if self.combined_view_window and self.combined_view_window.isVisible():
+                self.combined_view_window.activateWindow()
+                return
+        except RuntimeError:
+            self.combined_view_window = None
+
+        self.combined_view_window = CombinedGraphView(self.synced_graphs_ordered, self)
+        self.combined_view_window.show()
+
     def closeEvent(self, event):
         self._is_closing = True
         self.stop_sending()
@@ -700,6 +728,14 @@ class LogViewerWindow(QMainWindow):
             graph.close()
         if self.main_window and self in getattr(self.main_window, 'log_viewers', []):
             self.main_window.log_viewers.remove(self)
+            
+        # 로그 뷰어 창이 닫힐 때 Combined View 창도 닫기
+        try:
+            if self.combined_view_window and self.combined_view_window.isVisible():
+                self.combined_view_window.parent_is_closing = True
+                self.combined_view_window.close()
+        except RuntimeError:
+            self.combined_view_window = None
         event.accept()
 
     def refresh_parsing(self):

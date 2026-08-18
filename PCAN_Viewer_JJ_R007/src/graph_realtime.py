@@ -41,6 +41,8 @@ class SignalGraphWindow(QWidget):
         self.btn_autoscroll = QPushButton("Auto-Scroll")
         self.btn_autoscroll.setCheckable(True)
         self.btn_autoscroll.setChecked(True)
+
+        self.btn_combined_view = QPushButton("Combined View")
         
         self.chk_sync = QCheckBox("Sync X-Axis")
         self.chk_sync.setChecked(False)
@@ -72,6 +74,7 @@ class SignalGraphWindow(QWidget):
         row1_layout.addWidget(self.btn_start)
         row1_layout.addWidget(self.btn_stop)
         row1_layout.addWidget(self.btn_autoscroll)
+        row1_layout.addWidget(self.btn_combined_view)
         row1_layout.addWidget(self.chk_sync)
         row1_layout.addStretch()
         row1_layout.addWidget(self.chk_crosshair)
@@ -164,6 +167,8 @@ class SignalGraphWindow(QWidget):
         # 상태 변수
         self.is_playing = True
         self.btn_start.setEnabled(False)
+        self.is_in_combined_view = False
+        self.combined_view_ref = None
         
         # X축 강제 갱신 중 무한 루프(Event Recursion) 방지용 플래그
         self._updating_xrange = False
@@ -173,6 +178,8 @@ class SignalGraphWindow(QWidget):
         self.btn_start.clicked.connect(self.start_graph)
         self.btn_stop.clicked.connect(self.stop_graph)
         self.btn_autoscroll.clicked.connect(self.on_autoscroll_clicked)
+        self.chk_sync.toggled.connect(self.notify_sync_toggle)
+        self.btn_combined_view.clicked.connect(self.request_combined_view)
         self.btn_clear_tags.clicked.connect(self.on_clear_tags_clicked)
         
         # 마우스 이벤트 캡처 (데이터 위치 확인용)
@@ -193,6 +200,22 @@ class SignalGraphWindow(QWidget):
         
         # 마우스 클릭 이벤트 (원하는 데이터 지점에 태그/마커 고정)
         self.plot_widget.scene().sigMouseClicked.connect(self.on_mouse_clicked)
+
+    def get_parent_window(self):
+        """상위 부모 윈도우(메인 또는 뷰어)를 반환합니다."""
+        return getattr(self, 'main_window', None) or getattr(self, 'viewer_window', None)
+
+    def notify_sync_toggle(self, checked):
+        """Sync 체크박스 상태가 변경될 때 부모 윈도우에 알립니다."""
+        parent = self.get_parent_window()
+        if parent and hasattr(parent, 'handle_sync_toggle'):
+            parent.handle_sync_toggle(self, checked)
+
+    def request_combined_view(self):
+        """'Combined View' 버튼 클릭 시 부모 윈도우에 통합 뷰 생성을 요청합니다."""
+        parent = self.get_parent_window()
+        if parent and hasattr(parent, 'open_combined_view'):
+            parent.open_combined_view()
 
     def _get_enum_string(self, sig_name, val):
         """시그널 이름과 값을 받아 해당하는 Enum 텍스트가 있다면 반환"""
@@ -295,8 +318,7 @@ class SignalGraphWindow(QWidget):
                     if new_color:
                         color_with_alpha = QColor(*new_color)
                         color_with_alpha.setAlpha(220)
-                        tag.opts['fill'] = color_with_alpha
-                        tag.update()
+                        tag.fill = color_with_alpha
                         marker.setBrush(pg.mkBrush(new_color))
 
             # 6. Refresh hover target highlight
@@ -509,13 +531,68 @@ class SignalGraphWindow(QWidget):
 
         # 지정된 그래프 파트(그래프+범례+태그 등) 픽스맵 캡처
         pixmaps = []
+
         for g in graphs_to_capture:
+            # 범례와 플롯의 원래 상태 저장
+            legend_state = {
+                'min_w': g.legend_widget.minimumWidth(), 'max_w': g.legend_widget.maximumWidth(),
+                'min_h': g.legend_widget.minimumHeight(), 'max_h': g.legend_widget.maximumHeight(),
+                'v_policy': g.legend_widget.verticalScrollBarPolicy(), 'h_policy': g.legend_widget.horizontalScrollBarPolicy(),
+                'elide_mode': g.legend_widget.textElideMode(),
+                'size_policy_h': g.legend_widget.sizePolicy().horizontalPolicy(),
+                'size_policy_v': g.legend_widget.sizePolicy().verticalPolicy(),
+                'fixed_width': g.legend_widget.width(), # Store current fixed width (should be 200)
+            }
+            plot_state = {
+                'min_h': g.plot_widget.minimumHeight(), 'max_h': g.plot_widget.maximumHeight(),
+                'size_policy_h': g.plot_widget.sizePolicy().horizontalPolicy(),
+                'size_policy_v': g.plot_widget.sizePolicy().verticalPolicy(),
+                'current_height': g.plot_widget.height(), # Store current height of plot
+            }
+
+            # 스크린샷을 위해 범례 위젯 임시 수정 (스크롤바 제거 및 전체 내용 표시)
+            g.legend_widget.setMinimumSize(0, 0)
+            g.legend_widget.setMaximumSize(16777215, 16777215)
+            g.legend_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            g.legend_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            g.legend_widget.setTextElideMode(Qt.ElideNone)
+            g.legend_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred) # Allow sizeHint to be accurate
+
+            # 레이아웃 업데이트를 강제하여 sizeHint가 정확한 값을 반환하도록 함
+            ideal_size = g.legend_widget.sizeHint()
+            
+            # 범례의 이상적인 높이와 현재 플롯의 높이 중 더 큰 값으로 두 위젯의 높이를 맞춤
+            target_height = max(plot_state['current_height'], ideal_size.height())
+
+            g.legend_widget.setFixedSize(ideal_size.width(), target_height) # 너비는 이상적인 너비, 높이는 맞춘 높이
+            g.plot_widget.setFixedHeight(target_height) # 플롯 위젯 높이도 맞춤
+            
+            # QApplication.processEvents()를 호출하여 레이아웃 변경이 화면에 반영되도록 함
+            QApplication.processEvents()
+            QApplication.processEvents() # 한 번 더 호출하여 안정성 확보
+
+            # 선택 해제 및 GUI 업데이트 후 스크린샷 캡처
             saved_selection = g.legend_widget.selectedItems()
-            g.legend_widget.clearSelection() # 스크린샷에 선택(Highlight) 상태가 보이지 않도록 일시 해제
-            QApplication.processEvents()     # GUI 갱신 적용 대기
+            g.legend_widget.clearSelection()
+            QApplication.processEvents()
             pixmaps.append(g.graph_container.grab())
+
+            # 원래 상태로 완벽하게 복원
             for item in saved_selection:
-                item.setSelected(True)       # 캡처 후 상태 복구
+                item.setSelected(True)
+            
+            g.legend_widget.setMinimumSize(legend_state['min_w'], legend_state['min_h'])
+            g.legend_widget.setMaximumSize(legend_state['max_w'], legend_state['max_h'])
+            g.legend_widget.setVerticalScrollBarPolicy(legend_state['v_policy'])
+            g.legend_widget.setHorizontalScrollBarPolicy(legend_state['h_policy'])
+            g.legend_widget.setTextElideMode(legend_state['elide_mode'])
+            g.legend_widget.setSizePolicy(legend_state['size_policy_h'], legend_state['size_policy_v'])
+            g.legend_widget.setFixedWidth(legend_state['fixed_width']) # Restore fixed width
+
+            # Restore plot widget's original size policy and remove fixed height constraint
+            g.plot_widget.setSizePolicy(plot_state['size_policy_h'], plot_state['size_policy_v'])
+            g.plot_widget.setMinimumHeight(0)
+            g.plot_widget.setMaximumHeight(16777215)
         
         total_width = max(p.width() for p in pixmaps)
         total_height = sum(p.height() for p in pixmaps)
@@ -700,17 +777,27 @@ class SignalGraphWindow(QWidget):
                 
             mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
             
-            # 선택된 범례 아이템 확인, 없으면 hover 콤보박스 대상
-            selected_items = [item.data(Qt.UserRole) for item in self.legend_widget.selectedItems()]
-            if not selected_items:
+            # --- Determine graphs to apply action to ---
+            graphs_to_tag = []
+            if self.is_in_combined_view and self.combined_view_ref:
+                graphs_to_tag = self.combined_view_ref.graphs
+            else:
+                graphs_to_tag.append(self)
+                if self.chk_sync.isChecked():
+                    parent_win = self.get_parent_window()
+                    if parent_win:
+                        for other in parent_win.active_graphs:
+                            if other is not self and other.chk_sync.isChecked() and other.isVisible():
+                                graphs_to_tag.append(other)
+
+            # --- Logic to handle tag removal ---
+            # Check the source graph (self) for a clicked tag first.
+            source_target_signals = [item.data(Qt.UserRole) for item in self.legend_widget.selectedItems()]
+            if not source_target_signals:
                 selected_signal = self.combo_hover_signal.currentData()
                 if selected_signal:
-                    selected_items = [selected_signal]
-            
-            target_signals = [sig for sig in selected_items if sig in self.curves and self.curves[sig].isVisible()]
-            if not target_signals:
-                return
-            
+                    source_target_signals = [selected_signal]
+
             pixel_width = self.plot_widget.plotItem.vb.viewPixelSize()[0]
             tolerance_x = pixel_width * 15
             
@@ -731,7 +818,7 @@ class SignalGraphWindow(QWidget):
                 closest_tag_key = (clicked_tag.signal_name, clicked_tag.t_val)
             else:
                 for (sig_name, t_val), (marker, tag) in list(self.active_tags.items()):
-                    if sig_name in target_signals:
+                    if sig_name in source_target_signals:
                         dist = abs(t_val - mouse_point.x())
                         if dist < min_dist:
                             min_dist = dist
@@ -740,35 +827,33 @@ class SignalGraphWindow(QWidget):
             if closest_tag_key is not None and (clicked_tag or min_dist <= tolerance_x):
                 marker, tag = self.active_tags.get(closest_tag_key, (None, None))
                 if tag:
-                    group_id = getattr(tag, 'group_id', None)
-                    if group_id is not None:
-                        self.remove_tags_by_group(group_id)
-                        if self.chk_sync.isChecked() and self.main_window:
-                            for other in self.main_window.active_graphs:
-                                if other is not self and other.chk_sync.isChecked() and other.isVisible():
-                                    other.remove_tags_by_group(group_id)
+                    remove_group_id = getattr(tag, 'group_id', None)
+                    if remove_group_id is not None:
+                        # Remove this group from all target graphs
+                        for g in graphs_to_tag:
+                            g.remove_tags_by_group(remove_group_id)
                     else:
                         self.remove_tag(closest_tag_key[0], closest_tag_key[1], tag, marker)
                 evt.accept()
                 return
 
+            # --- Logic to handle tag addition ---
             target_x = mouse_point.x()
             group_id = target_x
             
-            for sig in target_signals:
-                self.add_tag_for_signal(sig, target_x, group_id)
+            for graph in graphs_to_tag:
+                # For each graph, find its selected signals
+                selected_items = [item.data(Qt.UserRole) for item in graph.legend_widget.selectedItems()]
+                if not selected_items:
+                    selected_signal = graph.combo_hover_signal.currentData()
+                    if selected_signal:
+                        selected_items = [selected_signal]
                 
-            if self.chk_sync.isChecked() and self.main_window:
-                for other in self.main_window.active_graphs:
-                    if other is not self and other.chk_sync.isChecked() and other.isVisible():
-                        other_selected = [item.data(Qt.UserRole) for item in other.legend_widget.selectedItems()]
-                        if not other_selected:
-                            o_sig = other.combo_hover_signal.currentData()
-                            if o_sig: other_selected = [o_sig]
-                        
-                        for other_sig in other_selected:
-                            if other_sig in other.curves and other.curves[other_sig].isVisible():
-                                other.add_tag_for_signal(other_sig, target_x, group_id)
+                target_signals_for_graph = [sig for sig in selected_items if sig in graph.curves and graph.curves[sig].isVisible()]
+
+                for sig in target_signals_for_graph:
+                    graph.add_tag_for_signal(sig, target_x, group_id)
+
             evt.accept()
             
         except Exception as e:
@@ -836,6 +921,19 @@ class SignalGraphWindow(QWidget):
         tag_key = (sig_name, t_val)
         if tag_key in self.active_tags:
             return
+
+        # --- Y-축 자동 확장 로직 (태그 가시성 확보) ---
+        view_box = self.plot_widget.getViewBox()
+        y_range = view_box.viewRange()[1]
+        y_min, y_max = y_range[0], y_range[1]
+
+        # 유효한 범위이고, 데이터 포인트가 상단에 가까울 때만 확장
+        if y_max > y_min:
+            # 데이터 포인트가 Y축 가시 범위의 상위 15% 내에 위치할 경우
+            if (y_val - y_min) / (y_max - y_min) > 0.85:
+                # Y축 범위를 현재 범위의 20%만큼 위로 확장
+                new_y_max = y_max + (y_max - y_min) * 0.2
+                view_box.setYRange(y_min, new_y_max, padding=0)
             
         try: t_val_str = datetime.datetime.fromtimestamp(t_val).strftime('%H:%M:%S.%f')[:-3]
         except: t_val_str = f"{t_val:.3f}"
