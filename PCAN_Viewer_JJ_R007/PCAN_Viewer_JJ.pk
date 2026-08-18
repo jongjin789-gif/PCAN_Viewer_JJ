@@ -593,21 +593,21 @@
     },
     "can_config": {
         "1": {
-            "channel": "PCAN-USB Pro FD (0x52) [FD]",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "2 MBit/s",
+            "data_bitrate": "Off",
             "is_open": true
         },
         "2": {
-            "channel": "PCAN-USB Pro FD (0x52) [FD]",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
             "data_bitrate": "Off",
             "is_open": false
         },
         "3": {
-            "channel": "PCAN-USB Pro FD (0x52) [FD]",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
             "data_bitrate": "Off",
