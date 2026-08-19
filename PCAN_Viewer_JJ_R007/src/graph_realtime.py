@@ -1096,4 +1096,8 @@ class SignalGraphWindow(QWidget):
         if self.btn_autoscroll.isChecked():
             latest = self.get_latest_time()
             if latest is not None:
+                # setXRange는 내부적으로 Y축의 auto-range도 비활성화하므로,
+                # X축 범위를 수동으로 설정한 후 Y축은 데이터에 맞게 자동으로 조절되도록 다시 활성화합니다.
+                # 이렇게 하면 Combined View에서도 실시간 데이터 수신 시 Y축이 자동으로 조절됩니다.
                 self.plot_widget.setXRange(latest - 30.0, latest, padding=0)
+                self.plot_widget.enableAutoRange(axis='y')

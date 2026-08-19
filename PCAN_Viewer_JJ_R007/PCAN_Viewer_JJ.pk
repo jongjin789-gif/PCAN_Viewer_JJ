@@ -583,7 +583,8 @@
     ],
     "db_files": {
         "1": [
-            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN1_operakit(V2)_Ver_1_0.sym"
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN1_operakit(V2)_Ver_1_0.sym",
+            "D:/Project/.Common/Test/STM32F103C8T6_Board_Pedal/ACC_BRK_Pedal_V101.sym"
         ],
         "2": [],
         "3": [
@@ -593,24 +594,24 @@
     },
     "can_config": {
         "1": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
-            "is_open": false
+            "data_bitrate": "Off",
+            "is_open": true
         },
         "2": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
+            "data_bitrate": "Off",
             "is_open": false
         },
         "3": {
-            "channel": "No available PCAN channels found",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "N/A",
+            "data_bitrate": "Off",
             "is_open": false
         }
     }

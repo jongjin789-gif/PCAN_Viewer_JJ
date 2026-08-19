@@ -894,4 +894,6 @@ class LogGraphWindow(QWidget):
     def closeEvent(self, event):
         if self.viewer_window and self in self.viewer_window.active_graphs:
             self.viewer_window.active_graphs.remove(self)
+        if self.viewer_window and self in self.viewer_window.synced_graphs_ordered:
+            self.viewer_window.synced_graphs_ordered.remove(self)
         event.accept()

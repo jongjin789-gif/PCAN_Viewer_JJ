@@ -1416,8 +1416,13 @@ class UniversalCANMonitor(QMainWindow):
 
     def update_ui_data(self):
         """Rx 스레드에서 수집한 최신 데이터를 기반으로 UI만 업데이트"""
-        # 닫힌 그래프 창 메모리 정리
-        self.active_graphs = [g for g in self.active_graphs if g.isVisible()]
+        # 닫힌 그래프 창 메모리 정리.
+        # Combined View에 포함되어 숨겨진(is_visible=False) 그래프도 업데이트 대상에 포함시켜야 하므로,
+        # is_in_combined_view 플래그를 함께 확인하여 목록에서 제외되지 않도록 합니다.
+        self.active_graphs = [g for g in self.active_graphs if g.isVisible() or getattr(g, 'is_in_combined_view', False)]
+        
+        # 닫힌 그래프는 동기화 목록에서도 동일한 기준으로 정리합니다.
+        self.synced_graphs_ordered = [g for g in self.synced_graphs_ordered if g.isVisible() or getattr(g, 'is_in_combined_view', False)]
         
         for bus_num, rx_thread in self.rx_threads.items():
             if not rx_thread: continue
