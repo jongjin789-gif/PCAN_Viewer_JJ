@@ -46,13 +46,37 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyle("Fusion") 
     
-    viewer_mode = get_viewer_mode()
-    window = UniversalCANMonitor(
-        viewer_only=viewer_mode,
-        user_panel_security={
-            "enabled": USER_PANEL_EDIT_PASSWORD_ENABLED,
-            "password": USER_PANEL_EDIT_PASSWORD,
-        },
-    )
-    window.show()
-    sys.exit(app.exec_())
+    # Windows에서 절전 모드 진입으로 인한 성능 저하 방지
+    if platform.system() == 'Windows':
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ES_DISPLAY_REQUIRED = 0x00000002
+        try:
+            # 시스템이 절전 모드로 전환되거나 디스플레이가 꺼지는 것을 방지
+            ctypes.windll.kernel32.SetThreadExecutionState(
+                ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+            )
+        except Exception as e:
+            print(f"[Warning] Could not prevent system sleep: {e}")
+
+    exit_code = 1
+    try:
+        viewer_mode = get_viewer_mode()
+        window = UniversalCANMonitor(
+            viewer_only=viewer_mode,
+            user_panel_security={
+                "enabled": USER_PANEL_EDIT_PASSWORD_ENABLED,
+                "password": USER_PANEL_EDIT_PASSWORD,
+            },
+        )
+        window.show()
+        exit_code = app.exec_()
+    finally:
+        # 프로그램 종료 시, 시스템 절전 방지 설정을 원래대로 복원
+        if platform.system() == 'Windows':
+            try:
+                ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+            except Exception as e:
+                print(f"[Warning] Could not restore system sleep settings: {e}")
+
+    sys.exit(exit_code)
