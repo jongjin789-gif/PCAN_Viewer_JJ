@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QShortcut,
     QSpinBox,
     QSlider,
+    QScrollArea,
     QRubberBand,
     QSplitter,
     QTabWidget,
@@ -90,6 +91,7 @@ class UserPanelWindow(QWidget):
 
         self.grid_rows = 36
         self.grid_cols = 36
+        self.grid_cell_size = 32
         self.mode = "edit"
 
         self.widgets_config = []
@@ -158,7 +160,9 @@ class UserPanelWindow(QWidget):
         controls.addWidget(self.btn_mode_edit)
         controls.addWidget(self.btn_mode_standby)
         controls.addWidget(self.btn_mode_run)
-        controls.addSpacing(12)
+        controls.addStretch()
+        root.addLayout(controls)
+        controls = QHBoxLayout()
         controls.addWidget(self.btn_add_tx)
         controls.addWidget(self.btn_add_rx)
         controls.addWidget(self.btn_add_misc)
@@ -171,12 +175,14 @@ class UserPanelWindow(QWidget):
         self._setup_shortcuts()
 
         self.label_mode = QLabel()
+        self.label_mode.setWordWrap(True)
         root.addWidget(self.label_mode)
 
         self.label_key_help = QLabel(
             "Move: Arrow keys | Resize span: Shift+Arrow | Delete: Del | Drag move/resize is supported in EDIT"
         )
         self.label_key_help.setStyleSheet("color:#555;")
+        self.label_key_help.setWordWrap(True)
         root.addWidget(self.label_key_help)
 
         split = QSplitter(Qt.Horizontal)
@@ -260,14 +266,15 @@ class UserPanelWindow(QWidget):
         self.canvas_layout.setContentsMargins(0, 0, 0, 0)
         self.canvas_layout.setHorizontalSpacing(0)
         self.canvas_layout.setVerticalSpacing(0)
-        for r in range(self.grid_rows):
-            self.canvas_layout.setRowStretch(r, 1)
-        for c in range(self.grid_cols):
-            self.canvas_layout.setColumnStretch(c, 1)
+        self._sync_canvas_size()
         self.canvas.mousePressEvent = self._on_canvas_mouse_press
         self.canvas.mouseReleaseEvent = self._on_canvas_mouse_release
 
-        right_lay.addWidget(self.canvas)
+        self.canvas_scroll = QScrollArea()
+        self.canvas_scroll.setWidgetResizable(True)
+        self.canvas_scroll.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.canvas_scroll.setWidget(self.canvas)
+        right_lay.addWidget(self.canvas_scroll)
 
         split.addWidget(left)
         split.addWidget(right)
@@ -933,6 +940,19 @@ class UserPanelWindow(QWidget):
         elif chosen == act_conflict:
             self.focus_next_conflict()
 
+    def _sync_canvas_size(self):
+        self.canvas.setMinimumSize(
+            self.grid_cols * self.grid_cell_size,
+            self.grid_rows * self.grid_cell_size,
+        )
+        # Clear obsolete tracks when loading a panel with fewer rows/columns.
+        for r in range(max(self.grid_rows, self.canvas_layout.rowCount())):
+            self.canvas_layout.setRowStretch(r, 1 if r < self.grid_rows else 0)
+            self.canvas_layout.setRowMinimumHeight(r, self.grid_cell_size if r < self.grid_rows else 0)
+        for c in range(max(self.grid_cols, self.canvas_layout.columnCount())):
+            self.canvas_layout.setColumnStretch(c, 1 if c < self.grid_cols else 0)
+            self.canvas_layout.setColumnMinimumWidth(c, self.grid_cell_size if c < self.grid_cols else 0)
+
     def rebuild_grid(self):
         while self.canvas_layout.count():
             item = self.canvas_layout.takeAt(0)
@@ -946,6 +966,7 @@ class UserPanelWindow(QWidget):
         self.widget_controls.clear()
         self.widget_child_hosts.clear()
         self._hide_drag_preview()
+        self._sync_canvas_size()
 
         sorted_cfg = sorted(self.widgets_config, key=lambda c: int(c.get("z_index", 0)))
 
@@ -2039,7 +2060,7 @@ class UserPanelWindow(QWidget):
     def _panel_data(self):
         return {
             "version": 2,
-            "grid": {"rows": self.grid_rows, "cols": self.grid_cols},
+            "grid": {"rows": self.grid_rows, "cols": self.grid_cols, "cell_size": self.grid_cell_size},
             "mode": self.mode,
             "widgets": self.widgets_config,
         }
@@ -2070,8 +2091,9 @@ class UserPanelWindow(QWidget):
         if not isinstance(data, dict):
             raise ValueError("Invalid panel file")
 
-        self.grid_rows = int(data.get("grid", {}).get("rows", 12))
-        self.grid_cols = int(data.get("grid", {}).get("cols", 12))
+        self.grid_rows = max(1, int(data.get("grid", {}).get("rows", 12)))
+        self.grid_cols = max(1, int(data.get("grid", {}).get("cols", 12)))
+        self.grid_cell_size = max(16, int(data.get("grid", {}).get("cell_size", 32)))
         self.widgets_config = list(data.get("widgets", []))
         for cfg in self.widgets_config:
             self._normalize_config(cfg)
