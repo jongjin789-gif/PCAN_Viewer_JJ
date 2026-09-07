@@ -1240,6 +1240,8 @@ class UserPanelWindow(QWidget):
 
             def _toggle(checked):
                 btn.setText("ON" if checked else "OFF")
+                if checked and behavior == "tx":
+                    self._uncheck_signal_toggles(cfg)
                 self._emit_tx(cfg, on_value if checked else off_value)
 
             btn.toggled.connect(_toggle)
@@ -1602,6 +1604,34 @@ class UserPanelWindow(QWidget):
         except Exception as e:
             if hasattr(self.main_window, "statusBar"):
                 self.main_window.statusBar().showMessage(f"User panel TX failed: {e}", 4000)
+
+    def _uncheck_signal_toggles(self, selected_cfg):
+        def signal_key(binding):
+            return (
+                int(binding.get("bus", 1)),
+                int(binding.get("can_id", 0)),
+                int(binding.get("start_bit", 0)),
+                int(binding.get("bit_length", 8)),
+                str(binding.get("byte_order", "little_endian")),
+            )
+
+        selected_key = signal_key(selected_cfg.get("binding", {}))
+        for cfg in self.widgets_config:
+            if cfg.get("id") == selected_cfg.get("id"):
+                continue
+            if cfg.get("widget_type") != "toggle" or cfg.get("behavior") != "tx":
+                continue
+            if signal_key(cfg.get("binding", {})) != selected_key:
+                continue
+            ctrl = self.widget_controls.get(cfg.get("id"))
+            if isinstance(ctrl, QPushButton) and ctrl.isCheckable():
+                # Deselect visually without sending OFF over the selected ON value.
+                was_blocked = ctrl.blockSignals(True)
+                try:
+                    ctrl.setChecked(False)
+                    ctrl.setText("OFF")
+                finally:
+                    ctrl.blockSignals(was_blocked)
 
     def _emit_tx(self, cfg, value):
         if self.mode != "run":

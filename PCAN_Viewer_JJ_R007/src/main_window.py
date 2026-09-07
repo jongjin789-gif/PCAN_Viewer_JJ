@@ -583,15 +583,18 @@ class UniversalCANMonitor(QMainWindow):
         if len(payload) != dlc:
             payload = bytearray([0] * dlc)
 
-        payload = self._pack_signal_to_payload(payload, binding, phys_value)
-        self.user_tx_cache[key] = bytes(payload)
-
         # BRS와 같은 프레임 레벨 속성을 캐시에 저장합니다.
         # 여러 도구가 동일 프레임에 다른 BRS 설정을 가질 경우, 마지막에 업데이트한 도구의 설정이 적용됩니다.
         is_brs = bool(binding.get("brs", False))
+        is_fd = bool(binding.get("is_fd", dlc > 8 or is_brs))
+        if not is_fd and (dlc > 8 or is_brs):
+            raise ValueError("Classic CAN requires at most 8 bytes and BRS disabled.")
+        payload = self._pack_signal_to_payload(payload, binding, phys_value)
+        self.user_tx_cache[key] = bytes(payload)
         if key not in self.user_frame_properties:
             self.user_frame_properties[key] = {}
         self.user_frame_properties[key]['brs'] = is_brs
+        self.user_frame_properties[key]['is_fd'] = is_fd
 
         return bus_num, can_id, dlc, key
 
@@ -609,9 +612,9 @@ class UniversalCANMonitor(QMainWindow):
         frame_props = self.user_frame_properties.get(key, {})
         is_brs = frame_props.get('brs', False)
 
-        is_fd = dlc > 8 or is_brs
+        is_fd = bool(frame_props.get('is_fd', dlc > 8 or is_brs))
         if is_fd and not self.bus_capabilities[int(bus_num)].get('is_fd', False):
-            raise RuntimeError(f"Bus {bus_num} does not support FD payload length {dlc}.")
+            raise RuntimeError(f"Bus {bus_num} is not connected in CAN FD mode.")
 
         msg = can.Message(
             arbitration_id=int(can_id),

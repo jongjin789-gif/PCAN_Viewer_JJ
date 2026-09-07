@@ -159,6 +159,13 @@ class WidgetConfigDialog(QDialog):
         self.spin_dlc.setValue(8)
         form_comm.addRow("DLC", self.spin_dlc)
 
+        self.combo_frame_type = QComboBox()
+        self.combo_frame_type.addItems(["Classic", "FD"])
+        form_comm.addRow("TX Frame Type", self.combo_frame_type)
+        self.chk_brs = QCheckBox("BRS (Bitrate Switch)")
+        self.chk_brs.setToolTip("Use the data bitrate configured when connecting the CAN FD channel.")
+        form_comm.addRow("TX Data Rate", self.chk_brs)
+
         self.spin_start_bit = QSpinBox()
         self.spin_start_bit.setRange(0, 511)
         self.spin_bit_length = QSpinBox()
@@ -319,6 +326,8 @@ class WidgetConfigDialog(QDialog):
         self._register_row(form_comm, self.combo_signal)
         self._register_row(form_comm, self.edit_can_id)
         self._register_row(form_comm, self.spin_dlc)
+        self._register_row(form_comm, self.combo_frame_type)
+        self._register_row(form_comm, self.chk_brs)
         self._register_row(form_comm, self.spin_start_bit)
         self._register_row(form_comm, self.spin_bit_length)
         self._register_row(form_comm, self.spin_scale)
@@ -482,6 +491,8 @@ class WidgetConfigDialog(QDialog):
             w.valueChanged.connect(self._on_any_changed)
 
         self.chk_signed.toggled.connect(self._on_any_changed)
+        self.combo_frame_type.currentIndexChanged.connect(self._on_any_changed)
+        self.chk_brs.toggled.connect(self._on_any_changed)
         self.chk_big_endian.toggled.connect(self._on_any_changed)
         self.chk_fill.toggled.connect(self._on_any_changed)
 
@@ -607,6 +618,9 @@ class WidgetConfigDialog(QDialog):
 
         self._set_row_visible(self.spin_resolution, is_tx and wtype in ("slider", "spinbox"))
         self._set_row_visible(self.combo_tx_cycle_mode, is_tx)
+        self._set_row_visible(self.combo_frame_type, is_tx)
+        self._set_row_visible(self.chk_brs, is_tx)
+        self.chk_brs.setEnabled(self.combo_frame_type.currentText() == "FD")
         self._set_row_visible(self.spin_tx_cycle_ms, is_tx)
 
         self._set_row_visible(self.stack_press_value, is_tx and wtype == "button")
@@ -642,7 +656,9 @@ class WidgetConfigDialog(QDialog):
         return len(self._enum_entries) > 0
 
     def _value_from_editor(self, spin_box, enum_combo):
-        if enum_combo.count() > 0 and enum_combo.isVisible() and enum_combo.currentData() is not None:
+        # get_config() also runs after accept() has hidden the dialog.
+        # Read the selected input mode independently of widget visibility.
+        if self._has_enum_choices() and enum_combo.count() > 0 and enum_combo.currentData() is not None:
             return float(enum_combo.currentData())
         return float(spin_box.value())
 
@@ -812,6 +828,9 @@ class WidgetConfigDialog(QDialog):
             msg = self.db_messages[bus][can_id]
             self.edit_can_id.setText(f"0x{can_id:X}")
             self.spin_dlc.setValue(int(getattr(msg, "length", 8) or 8))
+            self.combo_frame_type.setCurrentText(
+                "FD" if getattr(msg, "is_fd", False) or self.spin_dlc.value() > 8 else "Classic"
+            )
             for sig in msg.signals:
                 self.combo_signal.addItem(sig.name, sig.name)
 
@@ -868,6 +887,11 @@ class WidgetConfigDialog(QDialog):
             pass
 
     def get_config(self, strict=True):
+        is_fd = self.combo_frame_type.currentText() == "FD"
+        if self.combo_behavior.currentText() == "tx" and not is_fd and self.spin_dlc.value() > 8:
+            if strict:
+                QMessageBox.warning(self, "Invalid Frame Type", "Classic CAN supports up to 8 bytes. Select FD.")
+            return None
         can_id = self._parse_can_id(strict=strict)
         if can_id is None:
             return None
@@ -894,6 +918,8 @@ class WidgetConfigDialog(QDialog):
                 "can_id": int(can_id),
                 "signal_name": self.combo_signal.currentData(),
                 "dlc": int(self.spin_dlc.value()),
+                "is_fd": is_fd,
+                "brs": is_fd and self.chk_brs.isChecked(),
                 "start_bit": int(self.spin_start_bit.value()),
                 "bit_length": int(self.spin_bit_length.value()),
                 "value_precision_decimals": self._precision_decimals(),
@@ -961,6 +987,10 @@ class WidgetConfigDialog(QDialog):
         self.edit_can_id.setText(f"0x{can_id:X}")
 
         self.spin_dlc.setValue(int(binding.get("dlc", 8)))
+        self.combo_frame_type.setCurrentText(
+            "FD" if binding.get("is_fd", int(binding.get("dlc", 8)) > 8 or binding.get("brs", False)) else "Classic"
+        )
+        self.chk_brs.setChecked(bool(binding.get("brs", False)))
         self.spin_start_bit.setValue(int(binding.get("start_bit", 0)))
         self.spin_bit_length.setValue(int(binding.get("bit_length", 8)))
         self.spin_scale.setValue(float(binding.get("scale", 1.0)))
