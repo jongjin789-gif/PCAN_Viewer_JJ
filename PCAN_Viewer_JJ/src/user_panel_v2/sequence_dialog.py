@@ -1,0 +1,292 @@
+import copy
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
+    QTableWidgetItem, QComboBox, QLineEdit, QSpinBox, QLabel, QMessageBox, QCheckBox, QHeaderView)
+from src.tx_panel import TxPacketDialog
+from .sequence import validate_steps, format_can_id
+
+
+def bit_text(data, mask):
+    lines = []
+    for i, (value, selected) in enumerate(zip(data, mask)):
+        bits = ''.join(str((value >> b) & 1) if selected & (1 << b) else 'X' for b in range(7, -1, -1))
+        lines.append(f"[{i}]: {bits[:4]} {bits[4:]}")
+    return '\n'.join(lines)
+
+
+def signal_mask(sig, length):
+    result = [0] * length
+    bit = int(sig.start)
+    for _ in range(sig.length):
+        if bit < 0 or bit >= length * 8:
+            raise ValueError("Signal exceeds packet length.")
+        result[bit // 8] |= 1 << (bit % 8)
+        bit = bit + 1 if sig.byte_order == "little_endian" else (bit + 15 if bit % 8 == 0 else bit - 1)
+    return result
+
+
+class BitsDialog(QDialog):
+    def __init__(self, data, mask, receive, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("RCV bits: X / 0 / 1" if receive else "CMD bits: 0 / 1")
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(len(data), 2)
+        self.table.setHorizontalHeaderLabels(["Byte", "bit 7 → bit 0"])
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        for i, line in enumerate(bit_text(data, mask).splitlines()):
+            item = QTableWidgetItem(f"[{i}]")
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(i, 0, item)
+            self.table.setItem(i, 1, QTableWidgetItem(line.split(': ')[1]))
+        layout.addWidget(self.table)
+        self.receive = receive
+        button = QPushButton("OK")
+        button.clicked.connect(self.accept)
+        layout.addWidget(button)
+        self.resize(360, 420)
+
+    def accept(self):
+        try:
+            self.data, self.mask = [], []
+            for row in range(self.table.rowCount()):
+                bits = self.table.item(row, 1).text().replace(' ', '').upper()
+                if len(bits) != 8 or any(c not in ('01X' if self.receive else '01') for c in bits):
+                    raise ValueError(f"Byte {row}: enter exactly 8 bits.")
+                self.data.append(int(bits.replace('X', '0'), 2))
+                self.mask.append(int(''.join('0' if c == 'X' else '1' for c in bits), 2))
+            super().accept()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Bits", str(exc))
+
+
+class SequencePacketDialog(TxPacketDialog):
+    def __init__(self, db_messages, step, parent=None):
+        self.receive_mode = step['kind'] == 'RCV'
+        self.saved_mask = list(step.get('mask', []))
+        super().__init__(db_messages, parent)
+        self.setWindowTitle("RCV 조건" if self.receive_mode else "CMD 패킷")
+        self.extended = QCheckBox("Extended ID")
+        self.timeout = QSpinBox()
+        self.timeout.setRange(1, 600000)
+        self.timeout.setValue(int(step.get('timeout_ms', 1000)))
+        self.timeout.setSuffix(" ms timeout")
+        self.repeat = QSpinBox()
+        self.repeat.setRange(1, 10000)
+        self.repeat.setValue(int(step.get('repeat', 1)))
+        self.repeat.setPrefix("Repeat: ")
+        self.bits = QPushButton("비트 값 편집")
+        self.bits.clicked.connect(self.edit_bits)
+        extras = QHBoxLayout()
+        extras.addWidget(self.extended)
+        extras.addWidget(self.timeout if self.receive_mode else self.repeat)
+        extras.addWidget(self.bits)
+        self.layout().insertLayout(1, extras)
+        if step.get('packet'):
+            self.set_packet_data(step['packet'])
+            self.edit_id.setText(f"{step['packet']['id']:X}")
+            self.extended.setChecked(step['packet'].get('is_extended_id', step['packet']['id'] > 0x7FF))
+        else:
+            self.combo_length.setCurrentText("8")
+            self.on_length_changed()
+        self.edit_id.textChanged.connect(self._suggest_extended)
+        self._mark_signals()
+        if self.receive_mode:
+            self.edit_cycle.setEnabled(False)
+            self.edit_cycle.setToolTip("RCV uses timeout; cycle is not executed.")
+            self.crc_combo.setToolTip("RCV compares saved bits; CRC is not recalculated.")
+
+    def _suggest_extended(self):
+        try:
+            if int(self.edit_id.text(), 16) > 0x7FF:
+                self.extended.setChecked(True)
+        except ValueError:
+            pass
+
+    def on_symbol_changed(self):
+        super().on_symbol_changed()
+        self._mark_signals()
+        if hasattr(self, 'extended') and self.current_db_msg:
+            self.extended.setChecked(bool(getattr(self.current_db_msg, 'is_extended_frame', False)))
+
+    def _mark_signals(self):
+        if not self.receive_mode or not self.current_db_msg:
+            return
+        self.table_signals.blockSignals(True)
+        try:
+            for row, sig in enumerate(self.current_db_msg.signals):
+                item = self.table_signals.item(row, 0)
+                if item:
+                    mask = signal_mask(sig, self.current_db_msg.length)
+                    selected = len(mask) == len(self.saved_mask) and all((a & b) == a for a, b in zip(mask, self.saved_mask))
+                    item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                    item.setCheckState(Qt.Checked if selected else Qt.Unchecked)
+        finally:
+            self.table_signals.blockSignals(False)
+
+    def comparison(self, packet):
+        mask = (self.saved_mask + [0] * packet['length'])[:packet['length']]
+        labels = []
+        if self.current_db_msg:
+            # Preserve partial-bit selections that cannot be represented by a whole-signal checkbox.
+            for row, sig in enumerate(self.current_db_msg.signals):
+                item = self.table_signals.item(row, 0)
+                sm = signal_mask(sig, packet['length'])
+                whole = all((a & b) == a for a, b in zip(sm, mask))
+                if item.checkState() == Qt.Checked:
+                    mask = [a | b for a, b in zip(mask, sm)]
+                    labels.append(f"{sig.name}={self.table_signals.item(row, 2).text()}")
+                elif whole:
+                    mask = [a & ~b for a, b in zip(mask, sm)]
+        return mask, ', '.join(labels)
+
+    def edit_bits(self):
+        try:
+            packet = self.get_packet_data()
+            mask = self.comparison(packet)[0] if self.receive_mode else [255] * packet['length']
+            dlg = BitsDialog(packet['data'], mask, self.receive_mode, self)
+            if dlg.exec_() == dlg.Accepted:
+                self.saved_mask = dlg.mask
+                self.edit_data.setText(' '.join(f'{b:02X}' for b in dlg.data))
+                self.on_data_edited()
+                self._mark_signals()
+        except Exception as exc:
+            QMessageBox.warning(self, "Packet", str(exc))
+
+    def accept(self):
+        try:
+            raw_hex = self.edit_data.text().replace(' ', '')
+            if len(raw_hex) % 2:
+                raise ValueError("HEX data must contain complete bytes.")
+            if not self.edit_id.text().strip():
+                raise ValueError("Enter a CAN ID (0 is allowed).")
+            packet = self.get_packet_data()
+            packet['is_extended_id'] = self.extended.isChecked()
+            self.result_step = dict(kind='RCV' if self.receive_mode else 'CMD', packet=packet,
+                                    timeout_ms=self.timeout.value(), repeat=self.repeat.value())
+            if self.receive_mode:
+                mask, labels = self.comparison(packet)
+                self.result_step['mask'] = mask
+                self.result_step['summary'] = labels or bit_text(packet['data'], mask)
+            else:
+                self.result_step['summary'] = f"Bus {packet['bus']} ID {format_can_id(packet)}: " + bytes(packet['data']).hex(' ').upper()
+            validate_steps([self.result_step])
+            QDialog.accept(self)
+        except Exception as exc:
+            QMessageBox.warning(self, "Packet", str(exc))
+
+
+class SequenceDialog(QDialog):
+    def __init__(self, db_messages, steps, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("명령 시퀀스 설정")
+        self.resize(850, 480)
+        self.db_messages = db_messages
+        self.steps = copy.deepcopy(steps) or [dict(kind='CMD')]
+        layout = QVBoxLayout(self)
+        toolbar = QHBoxLayout()
+        for title, action in (("생성", self.add), ("삭제", self.delete),
+                              ("위로", lambda: self.move(-1)), ("아래로", lambda: self.move(1))):
+            button = QPushButton(title)
+            button.clicked.connect(action)
+            toolbar.addWidget(button)
+        layout.addLayout(toolbar)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["종류", "생성 / 편집", "명령어 / 응답 이름", "명령어 뷰어"])
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        layout.addWidget(self.table)
+        buttons = QHBoxLayout()
+        for title, action in (("OK", self.accept), ("Cancel", self.reject)):
+            button = QPushButton(title)
+            button.clicked.connect(action)
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.refresh()
+
+    def refresh(self, selected=0):
+        self.table.setRowCount(0)
+        for row, step in enumerate(self.steps):
+            self.table.insertRow(row)
+            combo = QComboBox()
+            combo.addItems(['CMD', 'RCV', 'DEL'])
+            combo.setCurrentText(step['kind'])
+            combo.currentTextChanged.connect(lambda kind, r=row: self.change(r, kind))
+            self.table.setCellWidget(row, 0, combo)
+            button = QPushButton("시간 설정" if step['kind'] == 'DEL' else "패킷 생성 / 편집")
+            button.clicked.connect(lambda _, r=row: self.edit(r))
+            self.table.setCellWidget(row, 1, button)
+            name = QLineEdit(step.get('name', ''))
+            name.setPlaceholderText("명령어 / 응답 이름")
+            name.textChanged.connect(lambda text, s=step: s.update(name=text))
+            self.table.setCellWidget(row, 2, name)
+            p = step.get('packet', {})
+            if step['kind'] == 'RCV' and p and p['id'] not in self.db_messages.get(p['bus'], {}):
+                viewer = QPushButton(f"{format_can_id(p)} · 비트 조건 보기 / 편집")
+                viewer.clicked.connect(lambda _, r=row: self.edit(r, True))
+            else:
+                summary = step.get('summary', '미설정')
+                if p:
+                    prefix = f"Bus {p['bus']} ID {format_can_id(p)}: "
+                    summary = prefix + (bytes(p['data']).hex(' ').upper() if step['kind'] == 'CMD' else summary)
+                viewer = QLineEdit(summary)
+                viewer.setReadOnly(True)
+            self.table.setCellWidget(row, 3, viewer)
+        if self.steps:
+            self.table.selectRow(max(0, min(selected, len(self.steps)-1)))
+
+    def add(self):
+        row = self.table.currentRow()
+        row = row + 1 if row >= 0 else len(self.steps)
+        self.steps.insert(row, dict(kind='CMD'))
+        self.refresh(row)
+
+    def delete(self):
+        row = self.table.currentRow()
+        if row >= 0:
+            self.steps.pop(row)
+            self.refresh(row)
+
+    def move(self, direction):
+        row = self.table.currentRow()
+        target = row + direction
+        if row >= 0 and 0 <= target < len(self.steps):
+            self.steps[row], self.steps[target] = self.steps[target], self.steps[row]
+            self.refresh(target)
+
+    def change(self, row, kind):
+        if self.steps[row].get('packet') or self.steps[row].get('summary'):
+            if QMessageBox.question(self, "종류 변경", "기존 단계 설정을 지우고 변경할까요?") != QMessageBox.Yes:
+                self.refresh(row)
+                return
+        self.steps[row] = dict(kind=kind, name=self.steps[row].get('name', ''))
+        self.refresh(row)
+
+    def edit(self, row, bits=False):
+        step = self.steps[row]
+        if step['kind'] == 'DEL':
+            from PyQt5.QtWidgets import QInputDialog
+            value, ok = QInputDialog.getInt(self, "DEL", "대기시간 (ms)", step.get('delay_ms', 0), 0, 600000)
+            if ok:
+                self.steps[row] = dict(kind='DEL', delay_ms=value, summary=f'{value} ms', name=step.get('name', ''))
+        elif bits:
+            dlg = BitsDialog(step['packet']['data'], step['mask'], True, self)
+            if dlg.exec_() == dlg.Accepted:
+                if not any(dlg.mask):
+                    QMessageBox.warning(self, "RCV", "Select at least one bit.")
+                    return
+                step['packet']['data'], step['mask'] = dlg.data, dlg.mask
+                step['summary'] = bit_text(dlg.data, dlg.mask)
+        else:
+            dlg = SequencePacketDialog(self.db_messages, step, self)
+            if dlg.exec_() == dlg.Accepted:
+                dlg.result_step['name'] = step.get('name', '')
+                self.steps[row] = dlg.result_step
+        self.refresh(row)
+
+    def accept(self):
+        try:
+            validate_steps(self.steps)
+            super().accept()
+        except Exception as exc:
+            QMessageBox.warning(self, "Sequence", str(exc))

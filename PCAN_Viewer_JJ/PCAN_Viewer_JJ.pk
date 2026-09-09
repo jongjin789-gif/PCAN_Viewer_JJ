@@ -1,0 +1,61 @@
+{
+    "viewer_mode_only": false,
+    "tx_packets": [
+        {
+            "bus": 2,
+            "id": 378,
+            "is_fd": false,
+            "is_brs": false,
+            "length": 8,
+            "data": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "cycle": 500,
+            "note": "",
+            "symbol": "N/A",
+            "count": 0,
+            "crc_type": "N/A"
+        }
+    ],
+    "db_files": {
+        "1": [
+            "D:/Project/.Common/Test/STM32F103C8T6_Board_Pedal/ACC_BRK_Pedal_V101.sym",
+            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/EMB/HL Mando_Rev2_EMB.sym"
+        ],
+        "2": [],
+        "3": [
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN3_ACC_BRK_Pedal_V101.sym",
+            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN3_Ioniq5_Steer_20260701.sym"
+        ]
+    },
+    "can_config": {
+        "1": {
+            "channel": "PCAN-USB FD (0x51) [FD]",
+            "bitrate": "500 kBit/s",
+            "fd_iso": "ISO",
+            "data_bitrate": "Off",
+            "is_open": true
+        },
+        "2": {
+            "channel": "PCAN-USB FD (0x52) [FD]",
+            "bitrate": "500 kBit/s",
+            "fd_iso": "ISO",
+            "data_bitrate": "Off",
+            "is_open": true
+        },
+        "3": {
+            "channel": "PCAN-USB FD (0x51) [FD]",
+            "bitrate": "500 kBit/s",
+            "fd_iso": "ISO",
+            "data_bitrate": "Off",
+            "is_open": false
+        }
+    }
+}

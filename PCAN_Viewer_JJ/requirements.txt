@@ -1,0 +1,5 @@
+PyQt5>=5.15.0
+python-can>=4.0.0
+cantools>=38.0.0
+pyqtgraph>=0.13.0
+pyinstaller>=5.0
