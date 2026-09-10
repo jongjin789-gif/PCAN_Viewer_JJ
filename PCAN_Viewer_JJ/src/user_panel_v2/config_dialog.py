@@ -1,5 +1,7 @@
 import uuid
 import copy
+from .binding import matching_signal, validate_config
+from .packets import find_packet, bind_packet
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -34,11 +36,19 @@ class WidgetConfigDialog(QDialog):
         live_preview_default=True,
         grid_rows=24,
         grid_cols=24,
+        embedded=False,
+        tx_packets=None,
     ):
         super().__init__(parent)
+        self.embedded = embedded
+        self._mapping_sync = False
+        self._loading = True
+        if embedded:
+            self.setWindowFlags(Qt.Widget)
         self.setWindowTitle("User Widget Config")
         self.resize(500, 620)
         self.db_messages = db_messages
+        self.tx_packets = tx_packets
         self.fixed_behavior = fixed_behavior
         self.parent_candidates = parent_candidates or []
         self.live_preview_default = bool(live_preview_default)
@@ -54,6 +64,8 @@ class WidgetConfigDialog(QDialog):
         if preset:
             self.set_config(preset)
         self._update_help_text()
+        self._loading = False
+        self.combo_behavior.currentIndexChanged.connect(self._load_db_messages)
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -64,6 +76,8 @@ class WidgetConfigDialog(QDialog):
             group = QGroupBox(title)
             form = QFormLayout(group)
             form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+            if self.embedded:
+                form.setRowWrapPolicy(QFormLayout.WrapLongRows)
             form.setContentsMargins(8, 8, 8, 8)
             return group, form
 
@@ -137,7 +151,7 @@ class WidgetConfigDialog(QDialog):
         self.combo_message = QComboBox()
         self.combo_message.setMaxVisibleItems(14)
         self.combo_message.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_message.setMinimumContentsLength(24)
+        self.combo_message.setMinimumContentsLength(12 if self.embedded else 24)
         self.combo_message.view().setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.combo_message.view().setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.combo_message.setToolTip("Use mouse wheel or Up/Down keys to scroll long message lists.")
@@ -147,7 +161,7 @@ class WidgetConfigDialog(QDialog):
         self.combo_signal = QComboBox()
         self.combo_signal.setMaxVisibleItems(14)
         self.combo_signal.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_signal.setMinimumContentsLength(24)
+        self.combo_signal.setMinimumContentsLength(12 if self.embedded else 24)
         self.combo_signal.view().setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.combo_signal.view().setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.combo_signal.currentIndexChanged.connect(self._on_signal_changed)
@@ -187,9 +201,11 @@ class WidgetConfigDialog(QDialog):
         form_comm.addRow("Offset", self.spin_offset)
 
         self.chk_signed = QCheckBox("Signed")
-        self.chk_big_endian = QCheckBox("Big Endian")
+        self.combo_byte_order = QComboBox()
+        self.combo_byte_order.addItem("Intel (Little Endian)", "little_endian")
+        self.combo_byte_order.addItem("Motorola (Big Endian)", "big_endian")
         form_comm.addRow("Sign", self.chk_signed)
-        form_comm.addRow("Byte Order", self.chk_big_endian)
+        form_comm.addRow("Byte Order", self.combo_byte_order)
 
         self.spin_min = QDoubleSpinBox()
         self.spin_min.setDecimals(3)
@@ -211,15 +227,7 @@ class WidgetConfigDialog(QDialog):
         self.spin_slider_initial.setRange(-1000000.0, 1000000.0)
         form_value.addRow("Initial Value (Home)", self.spin_slider_initial)
 
-        self.combo_tx_cycle_mode = QComboBox()
-        self.combo_tx_cycle_mode.addItems(["immediate", "fixed", "dbc", "fastest"])
-        self.combo_tx_cycle_mode.setCurrentText("immediate")
-        form_value.addRow("TX Cycle Mode", self.combo_tx_cycle_mode)
 
-        self.spin_tx_cycle_ms = QSpinBox()
-        self.spin_tx_cycle_ms.setRange(1, 600000)
-        self.spin_tx_cycle_ms.setValue(100)
-        form_value.addRow("TX Cycle (ms)", self.spin_tx_cycle_ms)
 
         self.spin_press_value = QDoubleSpinBox()
         self.spin_press_value.setDecimals(3)
@@ -339,15 +347,13 @@ class WidgetConfigDialog(QDialog):
         self._register_row(form_comm, self.spin_scale)
         self._register_row(form_comm, self.spin_offset)
         self._register_row(form_comm, self.chk_signed)
-        self._register_row(form_comm, self.chk_big_endian)
+        self._register_row(form_comm, self.combo_byte_order)
         self._register_row(form_comm, self.edit_unit)
 
         self._register_row(form_value, self.spin_min)
         self._register_row(form_value, self.spin_max)
         self._register_row(form_value, self.spin_resolution)
         self._register_row(form_value, self.spin_slider_initial)
-        self._register_row(form_value, self.combo_tx_cycle_mode)
-        self._register_row(form_value, self.spin_tx_cycle_ms)
         self._register_row(form_value, self.stack_press_value)
         self._register_row(form_value, self.stack_release_value)
         self._register_row(form_value, self.stack_toggle_on_value)
@@ -381,7 +387,6 @@ class WidgetConfigDialog(QDialog):
             self.combo_message,
             self.combo_signal,
             self.edit_can_id,
-            self.combo_tx_cycle_mode,
             self.combo_press_enum,
             self.combo_release_enum,
             self.combo_toggle_on_enum,
@@ -427,12 +432,16 @@ class WidgetConfigDialog(QDialog):
 
         self.chk_live_preview = QCheckBox("Live preview while editing")
         self.chk_live_preview.setChecked(self.live_preview_default)
+        if self.embedded:
+            self.chk_live_preview.setChecked(False)
+            self.chk_live_preview.hide()
         root.addWidget(self.chk_live_preview)
 
         btns = QHBoxLayout()
         btns.addStretch()
-        btn_ok = QPushButton("OK")
+        btn_ok = QPushButton("Apply Properties" if self.embedded else "OK")
         btn_cancel = QPushButton("Cancel")
+        btn_cancel.setVisible(not self.embedded)
         btn_ok.clicked.connect(self.accept)
         btn_cancel.clicked.connect(self.reject)
         btns.addWidget(btn_ok)
@@ -452,7 +461,6 @@ class WidgetConfigDialog(QDialog):
             self.combo_shape_kind,
             self.combo_shape_line_dir,
             self.combo_stroke_style,
-            self.combo_tx_cycle_mode,
             self.combo_parent_tool,
             self.combo_press_enum,
             self.combo_release_enum,
@@ -494,7 +502,6 @@ class WidgetConfigDialog(QDialog):
             self.spin_rx_off_a,
             self.spin_rx_off_b,
             self.spin_stroke_width,
-            self.spin_tx_cycle_ms,
             self.spin_corner_radius,
         ]
         for w in num_watchers:
@@ -504,8 +511,12 @@ class WidgetConfigDialog(QDialog):
         self.spin_slider_initial.valueChanged.connect(self._on_any_changed)
         self.combo_frame_type.currentIndexChanged.connect(self._on_any_changed)
         self.chk_brs.toggled.connect(self._on_any_changed)
-        self.chk_big_endian.toggled.connect(self._on_any_changed)
+        self.combo_byte_order.currentIndexChanged.connect(self._on_any_changed)
         self.chk_fill.toggled.connect(self._on_any_changed)
+        self.spin_start_bit.valueChanged.connect(self._match_bit_fields)
+        self.spin_bit_length.valueChanged.connect(self._match_bit_fields)
+        self.combo_byte_order.currentIndexChanged.connect(self._match_bit_fields)
+        self.edit_can_id.editingFinished.connect(self._match_bit_fields)
 
         self._apply_precision_setting()
         self._update_visibility()
@@ -554,7 +565,14 @@ class WidgetConfigDialog(QDialog):
 
     def _edit_sequence(self):
         from .sequence_dialog import SequenceDialog
-        dlg = SequenceDialog(self.db_messages, self.sequence_steps, self)
+        dlg = SequenceDialog(self.db_messages, self.sequence_steps, self, tx_packets=self.tx_packets)
+        if self.embedded:
+            from .inline_editor import show_inline_editor
+            def apply_steps():
+                self.sequence_steps = copy.deepcopy(dlg.steps)
+                self._on_any_changed()
+            show_inline_editor(self, dlg, apply_steps)
+            return
         if dlg.exec_() == dlg.Accepted:
             self.sequence_steps = copy.deepcopy(dlg.steps)
             self._on_any_changed()
@@ -630,7 +648,7 @@ class WidgetConfigDialog(QDialog):
             self.spin_scale,
             self.spin_offset,
             self.chk_signed,
-            self.chk_big_endian,
+            self.combo_byte_order,
             self.edit_unit,
         ):
             self._set_row_visible(w, show_signal_map)
@@ -641,11 +659,11 @@ class WidgetConfigDialog(QDialog):
 
         self._set_row_visible(self.spin_resolution, is_tx and wtype in ("slider", "spinbox"))
         self._set_row_visible(self.spin_slider_initial, is_tx and wtype == "slider")
-        self._set_row_visible(self.combo_tx_cycle_mode, is_tx)
-        self._set_row_visible(self.combo_frame_type, is_tx)
-        self._set_row_visible(self.chk_brs, is_tx)
+        self._set_row_visible(self.combo_frame_type, is_tx and self.tx_packets is None)
+        self._set_row_visible(self.chk_brs, is_tx and self.tx_packets is None)
+        self.edit_can_id.setReadOnly(is_tx and self.tx_packets is not None)
+        self.spin_dlc.setEnabled(not (is_tx and self.tx_packets is not None))
         self.chk_brs.setEnabled(self.combo_frame_type.currentText() == "FD")
-        self._set_row_visible(self.spin_tx_cycle_ms, is_tx)
 
         self._set_row_visible(self.stack_press_value, is_tx and wtype == "button")
         self._set_row_visible(self.stack_release_value, is_tx and wtype == "button")
@@ -782,6 +800,8 @@ class WidgetConfigDialog(QDialog):
             self._configure_value_spin(spin, min_v, max_v, decimals)
 
     def _on_any_changed(self, *_args):
+        if self._loading or self._mapping_sync:
+            return
         self._update_visibility()
         self._update_help_text()
         if not self.chk_live_preview.isChecked():
@@ -812,6 +832,8 @@ class WidgetConfigDialog(QDialog):
             "none": "No CAN binding",
         }.get(behavior, "")
         self.help_text.setText(f"{desc}\n{mode_text}\nSignal mapping: CAN ID + bit field + scale/offset")
+        if self.embedded:
+            self.help_text.hide()
 
     def _parse_can_id(self, strict=True):
         text = (self.edit_can_id.text() or "0").strip().lower().replace("h", "")
@@ -831,9 +853,16 @@ class WidgetConfigDialog(QDialog):
         self.combo_message.clear()
 
         bus = int(self.combo_bus.currentText())
-        self.combo_message.addItem("Manual Input", None)
-        for can_id, msg in sorted(self.db_messages.get(bus, {}).items()):
-            self.combo_message.addItem(f"{msg.name} (0x{can_id:X})", can_id)
+        if self.combo_behavior.currentText() == 'tx' and self.tx_packets is not None:
+            for packet in self.tx_packets:
+                if packet['bus'] == bus:
+                    self.combo_message.addItem(f"{packet.get('symbol', 'N/A')} (0x{packet['id']:X})", packet['id'])
+            if not self.combo_message.count():
+                self.combo_message.addItem('등록된 TX 패킷 없음', None)
+        else:
+            self.combo_message.addItem("Manual Input", None)
+            for can_id, msg in sorted(self.db_messages.get(bus, {}).items()):
+                self.combo_message.addItem(f"{msg.name} (0x{can_id:X})", can_id)
 
         self.combo_message.blockSignals(False)
         self._on_message_changed()
@@ -844,7 +873,7 @@ class WidgetConfigDialog(QDialog):
     def _on_message_changed(self):
         self.combo_signal.blockSignals(True)
         self.combo_signal.clear()
-        self.combo_signal.addItem("Manual", None)
+        self.combo_signal.addItem("Unknown (Manual)", None)
 
         bus = int(self.combo_bus.currentText())
         can_id = self.combo_message.currentData()
@@ -859,13 +888,23 @@ class WidgetConfigDialog(QDialog):
                 self.combo_signal.addItem(sig.name, sig.name)
 
         self.combo_signal.blockSignals(False)
+        if self.combo_behavior.currentText() == 'tx' and self.tx_packets is not None:
+            packet = find_packet(self.tx_packets, dict(bus=bus, can_id=can_id)) if can_id is not None else None
+            if packet:
+                self.edit_can_id.setText(f"0x{packet['id']:X}")
+                self.spin_dlc.setValue(packet['length'])
+                self.combo_frame_type.setCurrentText('FD' if packet['is_fd'] else 'Classic')
+                self.chk_brs.setChecked(packet.get('is_brs', False))
         self._on_signal_changed()
 
     def _on_signal_changed(self):
+        if self._mapping_sync:
+            return
         bus = int(self.combo_bus.currentText())
         can_id = self.combo_message.currentData()
         sig_name = self.combo_signal.currentData()
         if can_id is None or sig_name is None:
+            self._reset_manual_value_ranges()
             self._enum_entries = []
             for combo in (
                 self.combo_press_enum,
@@ -882,6 +921,7 @@ class WidgetConfigDialog(QDialog):
             return
 
         try:
+            self._mapping_sync = True
             sig = msg.get_signal_by_name(sig_name)
             self.spin_start_bit.setValue(int(getattr(sig, "start", getattr(sig, "start_bit", 0))))
             self.spin_bit_length.setValue(int(getattr(sig, "length", 8)))
@@ -889,7 +929,7 @@ class WidgetConfigDialog(QDialog):
             self.spin_offset.setValue(float(getattr(sig, "offset", 0.0) or 0.0))
             self.chk_signed.setChecked(bool(getattr(sig, "is_signed", False)))
             byte_order = str(getattr(sig, "byte_order", "little_endian"))
-            self.chk_big_endian.setChecked(byte_order == "big_endian")
+            self.combo_byte_order.setCurrentIndex(1 if byte_order == "big_endian" else 0)
             if getattr(sig, "unit", None):
                 self.edit_unit.setText(sig.unit)
 
@@ -909,6 +949,45 @@ class WidgetConfigDialog(QDialog):
             self._update_visibility()
         except Exception:
             pass
+        finally:
+            self._mapping_sync = False
+
+    def _reset_manual_value_ranges(self):
+        for spin in (self.spin_press_value, self.spin_release_value,
+                     self.spin_toggle_on_value, self.spin_toggle_off_value):
+            spin.setRange(-1000000.0, 1000000.0)
+            spin.setDecimals(self._precision_decimals())
+
+    def _match_bit_fields(self, *_args):
+        if self._loading or self._mapping_sync:
+            return
+        can_id = self._parse_can_id(strict=False)
+        binding = dict(bus=int(self.combo_bus.currentText()), can_id=can_id or 0,
+                       start_bit=self.spin_start_bit.value(), bit_length=self.spin_bit_length.value(),
+                       byte_order=self.combo_byte_order.currentData(),
+                       signal_name=self.combo_signal.currentData())
+        sig = matching_signal(self.db_messages, binding) if can_id is not None else None
+        self._mapping_sync = True
+        try:
+            self.combo_message.blockSignals(True)
+            index = self.combo_message.findData(can_id)
+            self.combo_message.setCurrentIndex(max(0, index))
+            self.combo_message.blockSignals(False)
+            self.combo_signal.blockSignals(True)
+            self.combo_signal.clear()
+            self.combo_signal.addItem("Unknown (Manual)", None)
+            msg = self.db_messages.get(binding["bus"], {}).get(can_id)
+            if msg:
+                for candidate in msg.signals:
+                    self.combo_signal.addItem(candidate.name, candidate.name)
+            self.combo_signal.setCurrentIndex(max(0, self.combo_signal.findData(sig.name if sig else None)))
+            self.combo_signal.blockSignals(False)
+            self._load_enum_entries(sig)
+            if sig is None:
+                self._reset_manual_value_ranges()
+        finally:
+            self._mapping_sync = False
+        self._update_visibility()
 
     def get_config(self, strict=True):
         if strict and self.combo_widget_type.currentText() == "sequence":
@@ -932,7 +1011,7 @@ class WidgetConfigDialog(QDialog):
         if max_v < min_v:
             min_v, max_v = max_v, min_v
 
-        return {
+        config = {
             "id": self._config_id,
             "widget_type": self.combo_widget_type.currentText(),
             "title": self.edit_title.text().strip() or "Widget",
@@ -957,14 +1036,12 @@ class WidgetConfigDialog(QDialog):
                 "scale": self._round_value(self.spin_scale.value()),
                 "offset": self._round_value(self.spin_offset.value()),
                 "signed": bool(self.chk_signed.isChecked()),
-                "byte_order": "big_endian" if self.chk_big_endian.isChecked() else "little_endian",
+                "byte_order": self.combo_byte_order.currentData(),
                 "min": self._round_value(min_v),
                 "max": self._round_value(max_v),
                 "tx_resolution": float(self.spin_resolution.value()),
                 "sequence_steps": copy.deepcopy(self.sequence_steps),
                 "tx_initial_value": float(self.spin_slider_initial.value()),
-                "tx_cycle_mode": self.combo_tx_cycle_mode.currentText(),
-                "tx_cycle_ms": int(self.spin_tx_cycle_ms.value()),
                 "tx_press_value": self._round_value(self._value_from_editor(self.spin_press_value, self.combo_press_enum)),
                 "tx_release_value": self._round_value(self._value_from_editor(self.spin_release_value, self.combo_release_enum)),
                 "tx_on_value": self._round_value(self._value_from_editor(self.spin_toggle_on_value, self.combo_toggle_on_enum)),
@@ -987,7 +1064,18 @@ class WidgetConfigDialog(QDialog):
             },
         }
 
+        if config['behavior'] == 'tx' and config['widget_type'] != 'sequence' and self.tx_packets is not None:
+            packet = find_packet(self.tx_packets, config['binding'])
+            if packet is None:
+                if strict:
+                    QMessageBox.warning(self, 'TX 패킷', '등록한 패킷을 선택하세요.')
+                return None
+            bind_packet(config['binding'], packet)
+        return config
+
     def set_config(self, config):
+        was_loading = self._loading
+        self._loading = True
         self._config_id = str(config.get("id") or self._config_id)
         self.edit_title.setText(config.get("title", "Widget"))
         self.spin_row.setValue(int(config.get("row", 0)))
@@ -1030,14 +1118,12 @@ class WidgetConfigDialog(QDialog):
         self.spin_scale.setValue(float(binding.get("scale", 1.0)))
         self.spin_offset.setValue(float(binding.get("offset", 0.0)))
         self.chk_signed.setChecked(bool(binding.get("signed", False)))
-        self.chk_big_endian.setChecked(binding.get("byte_order", "little_endian") == "big_endian")
+        self.combo_byte_order.setCurrentIndex(1 if binding.get("byte_order", "little_endian") == "big_endian" else 0)
         self.spin_min.setValue(float(binding.get("min", 0.0)))
         self.spin_max.setValue(float(binding.get("max", 100.0)))
 
         self.spin_resolution.setValue(float(binding.get("tx_resolution", 1.0)))
         self.spin_slider_initial.setValue(float(binding.get("tx_initial_value", binding.get("min", 0.0))))
-        self.combo_tx_cycle_mode.setCurrentText(str(binding.get("tx_cycle_mode", "immediate")))
-        self.spin_tx_cycle_ms.setValue(int(binding.get("tx_cycle_ms", 100)))
         self.spin_press_value.setValue(float(binding.get("tx_press_value", binding.get("max", 100.0))))
         self.spin_release_value.setValue(float(binding.get("tx_release_value", binding.get("min", 0.0))))
         self.spin_toggle_on_value.setValue(float(binding.get("tx_on_value", 1.0)))
@@ -1060,10 +1146,12 @@ class WidgetConfigDialog(QDialog):
         self.spin_corner_radius.setValue(int(binding.get("corner_radius", 0)))
         self.edit_unit.setText(binding.get("unit", ""))
 
-        sig_name = binding.get("signal_name")
-        idx_sig = self.combo_signal.findData(sig_name)
-        if idx_sig >= 0:
-            self.combo_signal.setCurrentIndex(idx_sig)
+        self.combo_signal.blockSignals(True)
+        self.combo_signal.setCurrentIndex(max(0, self.combo_signal.findData(binding.get("signal_name"))))
+        self.combo_signal.blockSignals(False)
+        self._loading = False
+        self._match_bit_fields()
+        self._loading = was_loading
 
         self._set_enum_selection_by_value(self.combo_press_enum, self.spin_press_value.value())
         self._set_enum_selection_by_value(self.combo_release_enum, self.spin_release_value.value())
@@ -1075,8 +1163,16 @@ class WidgetConfigDialog(QDialog):
     def accept(self):
         try:
             cfg = self.get_config(strict=True)
+            if cfg is None:
+                return
+            validate_config(cfg)
             self.config_changed.emit(cfg)
         except ValueError as e:
             QMessageBox.warning(self, "Invalid Input", str(e))
             return
-        super().accept()
+        if not self.embedded:
+            super().accept()
+
+    def reject(self):
+        if not self.embedded:
+            super().reject()

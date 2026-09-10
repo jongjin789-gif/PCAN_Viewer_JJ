@@ -1,5 +1,13 @@
 # User Panel Release Notes
 
+## 속성창 편집 업데이트 (소스)
+
+- 생성창은 유지하고 기존 도구 편집은 오른쪽 Tool Properties로 변경. 위치·크기·CAN/DBC·신호·동작 속성 및 시퀀스 상세 편집 지원.
+- Ctrl/Shift 다중 선택, 혼합값 표시, 체크한 공통 속성만 일괄 적용. CAN BUS 속도는 연결 해제 상태에서 메인창 설정과 함께 변경.
+- DBC 없는 패널 재로드 및 비트 직접 편집 지원. 저장된 Start Bit/Length 보존, DBC 신호 자동 매칭과 Unknown 표시.
+- 일반 도구의 Motorola(big-endian) 정수 비트 인코딩/디코딩 추가. 오버랩 검사도 실제 비트 위치를 사용.
+- 아래 R008 배포 당시의 little-endian 제한은 이번 소스 업데이트에서 해제됨. 실행 파일은 별도 재빌드 필요.
+
 ## R008 업데이트
 
 버전 기준: `build_exe.py`의 `APP_VERSION = "R008"`. 소스 폴더명 `PCAN_Viewer_JJ_R007`은 유지합니다.

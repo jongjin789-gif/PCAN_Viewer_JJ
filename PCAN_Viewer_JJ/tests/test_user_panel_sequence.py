@@ -39,6 +39,13 @@ class SequenceTest(unittest.TestCase):
         self.panel.deleteLater()
 
     def control(self, steps):
+        from src.user_panel_v2.packets import PacketRuntime
+        for step in steps:
+            if step['kind'] == 'CMD':
+                registered = copy.deepcopy(step['packet'])
+                registered['packet_id'] = f"{registered['bus']}:{registered['id']}"
+                self.panel.tx_packets = [p for p in self.panel.tx_packets if p['packet_id'] != registered['packet_id']] + [registered]
+                self.panel._packet_runtimes[registered['packet_id']] = PacketRuntime(registered, {}, self.main)
         cfg = dict(id='seq', title='Init', widget_type='sequence', behavior='tx', binding=dict(sequence_steps=steps))
         ctrl = SequenceControl(self.panel, cfg)
         self.panel.widget_controls['seq'] = ctrl
@@ -168,11 +175,10 @@ class SequenceTest(unittest.TestCase):
         self.panel.widget_controls['button'] = button
         button.pressed.emit()
         timer = button.findChild(QTimer, 'panel_hold_timer')
-        self.assertTrue(timer.isActive())
+        self.assertIsNone(timer)  # Repetition now belongs to the registered packet.
         frame_timer = QTimer(self.panel)
         frame_timer.start(100)
         self.panel._frame_timers[(1, 1, 8)] = frame_timer
         self.panel.set_mode('edit')
-        self.assertFalse(timer.isActive())
         self.assertFalse(frame_timer.isActive())
         button.deleteLater()

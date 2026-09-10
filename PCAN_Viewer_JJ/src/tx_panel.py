@@ -4,8 +4,14 @@ import datetime
 import can
 import sys
 import json
+import math
+import base64
+from src.tx_counter import counter_payload
+from src.db_frame_format import message_is_fd
+from src.tx_crc import validate_crc, crc_order
+from src.tx_crc_dialog import SignalCRCDialog
 from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QEvent
 from PyQt5.QtGui import QFont, QKeySequence
 from src.crc_utils import calculate_crc16_ccitt_false
 from src.utils import SortableTreeWidgetItem
@@ -15,7 +21,7 @@ class TxPacketDialog(QDialog):
     def __init__(self, db_messages, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Create Packet")
-        self.resize(600, 500)
+        self.resize(1000, 500)
         self.db_messages = db_messages # {bus_num: {can_id: msg}}
         self.current_db_msg = None
         self._updating = False
@@ -23,6 +29,130 @@ class TxPacketDialog(QDialog):
         self.init_ui()
         self.on_bus_changed()
         
+    def bus_is_fd(self):
+        panel = self.parent()
+        owner = getattr(panel, "main_window", panel)
+        return getattr(owner, "bus_capabilities", {}).get(int(self.combo_bus.currentText()), {}).get("is_fd", False)
+
+    def fit_signal_name_column(self):
+        if getattr(self, '_fitting_signal_column', False):
+            return
+        self._fitting_signal_column = True
+        try:
+            table = self.table_signals
+            remaining = table.viewport().width() - sum(table.columnWidth(col) for col in range(1, table.columnCount()))
+            table.setColumnWidth(0, max(205, remaining))
+        finally:
+            self._fitting_signal_column = False
+
+    def eventFilter(self, watched, event):
+        if watched is self.table_signals.viewport() and event.type() == QEvent.Resize:
+            self.fit_signal_name_column()
+        return super().eventFilter(watched, event)
+
+    def add_counter_cells(self, row, sig):
+        combo = QComboBox()
+        for label, mode in [("None", "none"), ("카운트 업", "up"), ("카운트 다운", "down"), ("순환(up,down,up...)", "alternate"), ("CRC-8", "crc8"), ("CRC-16", "crc16")]:
+            combo.addItem(label, mode)
+        self.table_signals.setCellWidget(row, 4, combo)
+        low = -(1 << (sig.length - 1)) if sig.is_signed else 0
+        high = (1 << (sig.length - int(sig.is_signed))) - 1
+        if getattr(sig, "is_float", False):
+            low, high = 0, 100
+        self.table_signals.setItem(row, 5, QTableWidgetItem(f"{low} ~ {high}"))
+        self.table_signals.setItem(row, 6, QTableWidgetItem("1"))
+        combo.currentIndexChanged.connect(self.update_counter_columns)
+        self.update_counter_columns()
+
+    def edit_signal_crc(self, row):
+        combo = self.table_signals.cellWidget(row, 4)
+        mode = combo.currentData()
+        sig = self.current_db_msg.get_signal_by_name(self.table_signals.item(row, 0).text())
+        configs = combo.property('crc_configs') or {}
+        dialog = SignalCRCDialog(sig, mode, int(self.combo_length.currentText() or 0), configs.get(mode), self)
+        if dialog.exec_() == QDialog.Accepted:
+            configs[mode] = dialog.config
+            combo.setProperty('crc_configs', configs)
+            self.update_counter_columns()
+
+    def update_counter_columns(self):
+        for row in range(self.table_signals.rowCount()):
+            combo = self.table_signals.cellWidget(row, 4)
+            active = combo is not None and combo.currentData() != "none"
+            is_crc = active and combo.currentData() in ('crc8', 'crc16')
+            button = self.table_signals.cellWidget(row, 5)
+            if is_crc:
+                if button is None:
+                    button = QPushButton('CRC 설정...')
+                    button.clicked.connect(lambda checked=False, r=row: self.edit_signal_crc(r))
+                    self.table_signals.setCellWidget(row, 5, button)
+                cfg = (combo.property('crc_configs') or {}).get(combo.currentData())
+                button.setText(f"설정: [{cfg['start']}:{cfg['start'] + cfg['size'] - 1}]..." if cfg else 'CRC 설정 (필수)...')
+            elif button is not None:
+                self.table_signals.removeCellWidget(row, 5)
+            for col in (5, 6):
+                item = self.table_signals.item(row, col)
+                if item:
+                    item.setFlags((Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable) if active and not is_crc else Qt.NoItemFlags)
+
+    def restore_counters(self, counters):
+        for row in range(self.table_signals.rowCount()):
+            cfg = counters.get(self.table_signals.item(row, 0).text())
+            if cfg:
+                combo = self.table_signals.cellWidget(row, 4)
+                if cfg['mode'] in ('crc8', 'crc16'):
+                    if cfg['mode'] == 'crc16':
+                        cfg = dict(cfg)
+                        sig = self.current_db_msg.get_signal_by_name(self.table_signals.item(row, 0).text())
+                        cfg.setdefault('result_byte_order', sig.byte_order)
+                    combo.setProperty('crc_configs', {cfg['mode']: cfg})
+                combo.setCurrentIndex(max(0, combo.findData(cfg["mode"])))
+                if cfg['mode'] not in ('crc8', 'crc16'):
+                    self.table_signals.item(row, 5).setText(f"{cfg['min']} ~ {cfg['max']}")
+                    self.table_signals.item(row, 6).setText(str(cfg["step"]))
+        self.update_counter_columns()
+
+    def get_counters(self):
+        counters = {}
+        for row in range(self.table_signals.rowCount()):
+            combo = self.table_signals.cellWidget(row, 4)
+            if combo is None or combo.currentData() == "none":
+                continue
+            name = self.table_signals.item(row, 0).text()
+            sig = self.current_db_msg.get_signal_by_name(name)
+            if combo.currentData() in ('crc8', 'crc16'):
+                cfg = (combo.property('crc_configs') or {}).get(combo.currentData())
+                if cfg is None:
+                    raise ValueError(f'{name}: 옆 셀에서 CRC 설정을 등록하세요.')
+                validate_crc(sig, cfg, int(self.combo_length.currentText() or 0))
+                counters[name] = cfg
+                continue
+            parse = float if getattr(sig, "is_float", False) else int
+            try:
+                low, high = [parse(v.strip()) for v in self.table_signals.item(row, 5).text().split("~")]
+                step = parse(self.table_signals.item(row, 6).text().strip())
+                if not all(math.isfinite(v) for v in (low, high, step)) or low > high or step <= 0:
+                    raise ValueError()
+                if not getattr(sig, "is_float", False):
+                    raw_low = -(1 << (sig.length - 1)) if sig.is_signed else 0
+                    raw_high = (1 << (sig.length - int(sig.is_signed))) - 1
+                    if low < raw_low or high > raw_high:
+                        raise ValueError()
+            except (ValueError, OverflowError):
+                raise ValueError(f"{name}: 범위는 원시값 '최소 ~ 최대', 분해능은 양수로 입력하세요. 신호 비트 범위를 초과할 수 없습니다.")
+            counters[name] = dict(mode=combo.currentData(), min=low, max=high, step=step)
+        if self.current_db_msg:
+            crc_order(self.current_db_msg, counters, int(self.combo_length.currentText() or 0))
+        return counters
+
+    def accept(self):
+        try:
+            self.get_packet_data()
+        except (ValueError, OverflowError) as exc:
+            QMessageBox.warning(self, "입력 오류", str(exc))
+            return
+        super().accept()
+
     def _format_phys_val(self, val):
         if isinstance(val, float):
             val_str = f"{round(val, 10):.10f}".rstrip('0')
@@ -117,14 +247,21 @@ class TxPacketDialog(QDialog):
         
         # DBC Signal Grid
         layout.addWidget(QLabel("DBC Signals:"))
-        self.table_signals = QTableWidget(0, 4)
-        self.table_signals.setHorizontalHeaderLabels(["Signal Name", "Range", "Value", "Unit"])
+        self.table_signals = QTableWidget(0, 7)
+        self.table_signals.setHorizontalHeaderLabels(["Signal Name", "Range", "Value", "Unit", "기능", "범위 (Raw) / CRC 설정", "분해능 (Raw)"])
         
-        # 컬럼 너비 조정: Signal Name은 남은 공간 모두 차지, Range 할당, Value와 Unit은 절반씩 축소
-        self.table_signals.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        # Signal Name만 남은 공간에 맞추고, 최소 너비는 기존 293px의 약 70%.
+        self.table_signals.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table_signals.setColumnWidth(0, 205)
         self.table_signals.setColumnWidth(1, 140)
         self.table_signals.setColumnWidth(2, 60)
-        self.table_signals.setColumnWidth(3, 40)
+        self.table_signals.setColumnWidth(3, 60)
+        self.table_signals.setColumnWidth(4, 150)
+        self.table_signals.setColumnWidth(5, 180)
+        self.table_signals.setColumnWidth(6, 110)
+        self.table_signals.viewport().installEventFilter(self)
+        self.table_signals.horizontalHeader().sectionResized.connect(self.fit_signal_name_column)
+        self.table_signals.setToolTip("Value는 물리값입니다. 자동 증감 범위는 '최소 ~ 최대', 분해능은 Factor/Offset 적용 전 원시값입니다.\n첫 전송은 현재 값을 범위 안으로 제한하여 사용합니다. 이후 전송 성공마다 증감합니다.")
         self.table_signals.cellChanged.connect(self.on_signal_cell_changed)
         layout.addWidget(self.table_signals)
         
@@ -191,6 +328,8 @@ class TxPacketDialog(QDialog):
         self.current_db_msg = None
         self.table_signals.setRowCount(0)
         self._updating = False
+        self.combo_type.setCurrentText("FD" if self.bus_is_fd() else "Classic")
+        self.on_type_changed()
         self.on_id_edited()
         
     def on_symbol_changed(self):
@@ -204,12 +343,14 @@ class TxPacketDialog(QDialog):
             
             # DBC 메시지에 맞게 Length와 Type 조정
             dlc = self.current_db_msg.length
-            if dlc > 8:
+            if message_is_fd(self.current_db_msg) or self.bus_is_fd():
                 self.combo_type.setCurrentIndex(1) # FD
             else:
                 self.combo_type.setCurrentIndex(0) # Classic
+            self._updating = False
             self.on_type_changed()
-            
+            self._updating = True
+            dlc = next((n for n in [*range(9), 12, 16, 20, 24, 32, 48, 64] if n >= dlc), dlc)
             idx = self.combo_length.findText(str(dlc))
             if idx >= 0:
                 self.combo_length.setCurrentIndex(idx)
@@ -261,6 +402,7 @@ class TxPacketDialog(QDialog):
                 item_unit = QTableWidgetItem(sig.unit if sig.unit else "")
                 item_unit.setFlags(item_unit.flags() & ~Qt.ItemIsEditable)
                 self.table_signals.setItem(row, 3, item_unit)
+                self.add_counter_cells(row, sig)
                 
             self.update_data_from_signals()
             self._updating = False
@@ -499,7 +641,8 @@ class TxPacketDialog(QDialog):
             except TypeError:
                 raw_bytes = self.current_db_msg.encode(data_dict) # 구버전 cantools 호환
                 
-            length = len(raw_bytes)
+            length = next((n for n in [*range(9), 12, 16, 20, 24, 32, 48, 64] if n >= len(raw_bytes)), len(raw_bytes))
+            raw_bytes = raw_bytes.ljust(length, b'\x00')
             idx = self.combo_length.findText(str(length))
             if idx >= 0:
                 self.combo_length.setCurrentIndex(idx)
@@ -538,6 +681,7 @@ class TxPacketDialog(QDialog):
         return {
             "bus": bus_num, "id": can_id, "is_fd": is_fd, "is_brs": is_brs, "length": total_length,
             "data": full_data, "cycle": self.edit_cycle.value(),
+            "signal_counters": self.get_counters(),
             "note": self.edit_note.text().strip(), "symbol": symbol, "count": 0, "crc_type": crc_type
         }
 
@@ -607,6 +751,7 @@ class TxPacketDialog(QDialog):
                 item_unit = QTableWidgetItem(sig.unit if sig.unit else "")
                 item_unit.setFlags(item_unit.flags() & ~Qt.ItemIsEditable)
                 self.table_signals.setItem(row, 3, item_unit)
+                self.add_counter_cells(row, sig)
         else:
             self.combo_symbol.setCurrentIndex(0)
             self.current_db_msg = None
@@ -639,6 +784,7 @@ class TxPacketDialog(QDialog):
         self.on_packet_type_changed(self.crc_combo.currentIndex())
         
         self._updating = False
+        self.restore_counters(data.get("signal_counters", {}))
         self.on_data_edited() # Data Hex를 바탕으로 Grid Value 자동 갱신 트리거
         self.update_data_range_label()
 
@@ -652,6 +798,7 @@ class TxPacketItem(SortableTreeWidgetItem):
         self.timer.setTimerType(Qt.PreciseTimer) # 타이머 오차를 최소화하여 정확한 Cycle Time 유지
         self.timer.timeout.connect(self.send_packet)
         self.is_running = False
+        self.counter_states = {}
         if self.packet_data.get('crc_type') == 'Hyundai_CRC':
             self.packet_data['alive_counter'] = 0
         self.update_ui()
@@ -689,6 +836,10 @@ class TxPacketItem(SortableTreeWidgetItem):
             try:
                 can_id = d["id"]
                 full_data = bytes(d["data"])
+                next_states = {}
+                if d.get("signal_counters"):
+                    db_msg = self.tx_panel.db_messages[d["bus"]][d["id"]]
+                    full_data, next_states = counter_payload(db_msg, full_data, d["signal_counters"], self.counter_states)
                 total_length = d["length"]
 
                 if d.get('crc_type') == 'Hyundai_CRC':
@@ -724,6 +875,8 @@ class TxPacketItem(SortableTreeWidgetItem):
                     bitrate_switch=d.get("is_brs", False)
                 )
                 bus_obj.send(msg)
+                self.counter_states = next_states
+                self.setText(7, " ".join(f"{b:02X}" for b in final_data))
 
                 if hasattr(self.tx_panel.main_window, 'record_tx_activity'):
                     self.tx_panel.main_window.record_tx_activity(
@@ -734,7 +887,7 @@ class TxPacketItem(SortableTreeWidgetItem):
                     )
 
                 self.packet_data["count"] += 1
-                self.setText(8, str(self.packet_data["count"]))
+                self.setText(9, str(self.packet_data["count"]))
             except Exception as e:
                 print(f"Tx Error: {e}")
                 if self.is_running:
@@ -1028,6 +1181,7 @@ class TxPanel(QWidget):
             new_data = dlg.get_packet_data()
             new_data["count"] = item.packet_data["count"] # 전송 카운트는 기존 값 유지
             
+            item.counter_states = {}
             item.packet_data = new_data
             item.update_ui()
             
@@ -1158,7 +1312,10 @@ class TxPanel(QWidget):
             is_brs = d.get("is_brs", False)
             brs_note = "BRS=On" if is_brs else ""
 
-            all_notes = [note for note in (crc_note, brs_note, note) if note]
+            counters = d.get("signal_counters", {})
+            counter_note = "Counters=" + base64.urlsafe_b64encode(json.dumps(counters).encode("utf-8")).decode("ascii") if counters else ""
+
+            all_notes = [note for note in (crc_note, brs_note, counter_note, note) if note]
             final_note = " ".join(all_notes)
             
             status = "Paused" if not item.is_running and cycle > 0 else ""
@@ -1197,10 +1354,15 @@ class TxPanel(QWidget):
                 note = ""
                 crc_type = "N/A"
                 is_brs = False
+                signal_counters = {}
                 if ';' in line and not line.startswith(';'):
                     parts = line.split(';', 1)
                     line = parts[0].strip()
                     note = parts[1].strip()
+                    counter_match = re.search(r'\bCounters=(\S+)', note)
+                    if counter_match:
+                        signal_counters = json.loads(base64.urlsafe_b64decode(counter_match.group(1)).decode("utf-8"))
+                        note = re.sub(r'\bCounters=\S+\s*', '', note, count=1).strip()
                     
                     crc_match = re.search(r'\bCRC=(\S+)\b', note)
                     if crc_match:
@@ -1265,6 +1427,7 @@ class TxPanel(QWidget):
                 data = {
                     "bus": bus_num, "id": can_id, "is_fd": is_fd, "is_brs": is_brs,
                     "length": length,
+                    "signal_counters": signal_counters,
                     "data": data_bytes, "cycle": cycle, "note": note, "symbol": symbol, "count": 0, "crc_type": crc_type
                 }
                 self.add_packet_to_tree(data)

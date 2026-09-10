@@ -22,12 +22,142 @@
             "symbol": "N/A",
             "count": 0,
             "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 355,
+            "is_fd": true,
+            "is_brs": false,
+            "length": 32,
+            "data": [
+                0,
+                0,
+                0,
+                64,
+                0,
+                0,
+                0,
+                0,
+                48,
+                192,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "cycle": 50,
+            "signal_counters": {
+                "ADC_0x163_CheckSum": {
+                    "extra": [],
+                    "init": 65535,
+                    "mode": "crc16",
+                    "poly": 4129,
+                    "refin": false,
+                    "refout": false,
+                    "result_byte_order": "big_endian",
+                    "size": 30,
+                    "start": 2,
+                    "xorout": 0
+                },
+                "ADC_0x163_RollingCounter": {
+                    "mode": "up",
+                    "min": 0,
+                    "max": 255,
+                    "step": 1
+                }
+            },
+            "note": "",
+            "symbol": "ADC_3",
+            "count": 0,
+            "crc_type": "N/A"
+        },
+        {
+            "bus": 1,
+            "id": 355,
+            "is_fd": true,
+            "is_brs": false,
+            "length": 32,
+            "data": [
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                48,
+                192,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "cycle": 0,
+            "signal_counters": {
+                "ADC_0x163_CheckSum": {
+                    "extra": [
+                        160,
+                        249
+                    ],
+                    "init": 65535,
+                    "mode": "crc16",
+                    "poly": 4129,
+                    "refin": false,
+                    "refout": false,
+                    "result_byte_order": "big_endian",
+                    "size": 30,
+                    "start": 2,
+                    "xorout": 0
+                }
+            },
+            "note": "",
+            "symbol": "ADC_3",
+            "count": 0,
+            "crc_type": "N/A"
         }
     ],
     "db_files": {
         "1": [
             "D:/Project/.Common/Test/STM32F103C8T6_Board_Pedal/ACC_BRK_Pedal_V101.sym",
-            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/EMB/HL Mando_Rev2_EMB.sym"
+            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/EMB/HL Mando_Rev2_EMB.sym",
+            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/ECM/HL Mando_Rev2_ECM.sym"
         ],
         "2": [],
         "3": [
@@ -40,15 +170,15 @@
             "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "Off",
+            "data_bitrate": "2 MBit/s",
             "is_open": true
         },
         "2": {
-            "channel": "PCAN-USB FD (0x52) [FD]",
+            "channel": "PCAN-USB FD (0x51) [FD]",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
             "data_bitrate": "Off",
-            "is_open": true
+            "is_open": false
         },
         "3": {
             "channel": "PCAN-USB FD (0x51) [FD]",

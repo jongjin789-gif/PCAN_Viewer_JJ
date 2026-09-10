@@ -138,6 +138,9 @@ class SequenceControl(QWidget):
             return
         try:
             self.steps = copy.deepcopy(self.cfg.get("binding", {}).get("sequence_steps", []))
+            if hasattr(self.owner, 'tx_packets'):
+                from .packets import validate_tool
+                validate_tool(self.owner.tx_packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=self.steps)))
             validate_steps(self.steps)
             main = self.owner.main_window
             self.required_buses = {s["packet"]["bus"] for s in self.steps if s["kind"] != "DEL"}
@@ -203,6 +206,13 @@ class SequenceControl(QWidget):
     def _send(self):
         try:
             p = self.steps[self.index]["packet"]
+            if hasattr(self.owner, 'tx_packets'):
+                runtime = self.owner._packet_runtimes[p['packet_id']]
+                runtime.send()
+                self.write(self.step_log("송신 완료"))
+                self.remaining -= 1
+                self.timer.start(int(p.get('cycle', 0)) if self.remaining else 0)
+                return
             payload = bytes(p["data"])
             if p.get("crc_type") == "Hyundai_CRC":
                 alive = p.get("alive_counter", 0)

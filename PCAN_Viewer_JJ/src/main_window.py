@@ -3,6 +3,7 @@ import platform
 import subprocess
 import time
 import can, cantools
+from src.db_frame_format import load_sym_with_fd
 from src.PCANBasic import *
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGroupBox, QHBoxLayout, QLabel, 
                              QComboBox, QPushButton, QListWidget, QListWidgetItem, QShortcut, QLineEdit,
@@ -528,46 +529,9 @@ class UniversalCANMonitor(QMainWindow):
         )
 
     def _pack_signal_to_payload(self, payload, binding, phys_value):
-        """저장된 바인딩 정보로 payload에 값을 비트 필드로 반영합니다.
-        현재 fallback 경로는 little_endian만 지원합니다.
-        """
-        start_bit = int(binding.get("start_bit", 0))
-        bit_length = int(binding.get("bit_length", 1))
-        scale = float(binding.get("scale", 1.0))
-        offset = float(binding.get("offset", 0.0))
-        signed = bool(binding.get("signed", False))
-        byte_order = str(binding.get("byte_order", "little_endian"))
-
-        if byte_order == "big_endian":
-            raise ValueError("Big endian fallback encoding is not supported yet.")
-
-        if bit_length <= 0 or bit_length > 64:
-            raise ValueError("Invalid bit length.")
-
-        raw_f = (float(phys_value) - offset) / scale if scale != 0 else 0.0
-        raw = int(round(raw_f))
-
-        if signed:
-            min_raw = -(1 << (bit_length - 1))
-            max_raw = (1 << (bit_length - 1)) - 1
-        else:
-            min_raw = 0
-            max_raw = (1 << bit_length) - 1
-
-        raw = max(min_raw, min(max_raw, raw))
-
-        if signed and raw < 0:
-            raw = (1 << bit_length) + raw
-
-        max_bits = len(payload) * 8
-        if start_bit + bit_length > max_bits:
-            raise ValueError("Bit range exceeds DLC.")
-
-        current = int.from_bytes(payload, byteorder="little", signed=False)
-        mask = ((1 << bit_length) - 1) << start_bit
-        current = (current & ~mask) | ((raw << start_bit) & mask)
-        new_payload = current.to_bytes(len(payload), byteorder="little", signed=False)
-        return bytearray(new_payload)
+        """Encode saved Intel or Motorola bit fields without requiring a DBC."""
+        from .user_panel_v2.binding import pack_value
+        return pack_value(payload, binding, phys_value)
 
     def send_user_panel_value(self, binding, phys_value):
         """User Panel에서 전달된 값을 CAN 프레임으로 인코딩하여 단발 전송합니다."""
@@ -636,6 +600,7 @@ class UniversalCANMonitor(QMainWindow):
 
         try:
             if self.user_panel_window is not None and self.user_panel_window.isVisible():
+                self.user_panel_window.refresh_dbc_bindings()
                 self.user_panel_window.raise_()
                 self.user_panel_window.activateWindow()
                 return
@@ -1143,14 +1108,14 @@ class UniversalCANMonitor(QMainWindow):
                 lines[i] = 'FormatVersion=6.0'
                 continue
             
-            # 2. cantools가 인식하지 못하는 전용 메타데이터 라인 자동 주석화
-            # 예: Title="Untitled", Version=1.0, Author=... 등
-            if lower_stripped.startswith(('title=', 'version=', 'author=', 'date=', 'description=', 'brs=')):
-                lines[i] = '// ' + line
+            # Title은 지원되는 헤더이므로 유지합니다. 미지원 항목은 행 번호를
+            # 유지하며 비웁니다. 주석으로 바꾸면 헤더/심볼 문법을 끊을 수 있습니다.
+            if lower_stripped.startswith(('version=', 'author=', 'date=', 'description=', 'brs=')):
+                lines[i] = ''
                 
         cleaned_content = '\n'.join(lines)
         try:
-            return cantools.database.load_string(cleaned_content, database_format='sym', strict=False)
+            return load_sym_with_fd(cleaned_content)
         except Exception as e:
             error_msg = str(e)
             line_match = re.search(r'line:\s*(\d+)', error_msg, re.IGNORECASE)
@@ -1222,10 +1187,9 @@ class UniversalCANMonitor(QMainWindow):
                 lines[i] = re.sub(r'(?i)^DLC\s*=', 'Len=', stripped)
                 continue
 
-            # 3. cantools가 인식하지 못하는 전용 메타데이터 라인 자동 주석화
-            # 예: Title="Untitled", Version=1.0, Author=... 등
-            if lower_stripped.startswith(('title=', 'version=', 'author=', 'date=', 'description=', 'brs=')):
-                lines[i] = '// ' + line
+            # Title은 유지하고 미지원 항목은 빈 줄로 대체합니다.
+            if lower_stripped.startswith(('version=', 'author=', 'date=', 'description=', 'brs=')):
+                lines[i] = ''
                 continue
 
             # 4. cantools는 'Enum=NAME(...)' 포맷을 기대하지만, 일부 파일은 'enum NAME(...)'을 사용합니다.
@@ -1242,7 +1206,7 @@ class UniversalCANMonitor(QMainWindow):
                 
         cleaned_content = '\n'.join(lines)
         try:
-            return cantools.database.load_string(cleaned_content, database_format='sym', strict=False)
+            return load_sym_with_fd(cleaned_content)
         except Exception as e:
             error_msg = str(e)
             line_match = re.search(r'line:\s*(\d+)', error_msg, re.IGNORECASE)
@@ -1281,6 +1245,8 @@ class UniversalCANMonitor(QMainWindow):
                 
         if not any(self.db_messages.values()):
             self.btn_open_log.setEnabled(False)
+        if self.user_panel_window is not None:
+            self.user_panel_window.refresh_dbc_bindings()
             
         for viewer in getattr(self, 'log_viewers', []):
             if viewer.isVisible():
@@ -1334,6 +1300,9 @@ class UniversalCANMonitor(QMainWindow):
                 del self.msg_tree_items[(bus_num, can_id)]
                 
                 self.add_message_to_tree(bus_num, can_id)
+
+        if self.user_panel_window is not None:
+            self.user_panel_window.refresh_dbc_bindings()
 
     def add_message_to_tree(self, bus_num, can_id, direction='Rx'):
         """CAN 데이터가 수신되었을 때 해당 메시지와 시그널을 트리에 동적 생성"""

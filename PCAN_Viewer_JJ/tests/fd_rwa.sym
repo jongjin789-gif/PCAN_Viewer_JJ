@@ -1,0 +1,32 @@
+FormatVersion=6.0 // Do not edit this line!
+Title="TREEZE_RT7_RxMsg_v3"
+{SENDRECEIVE}
+[RWA_2]
+ID=147h
+Type=FDStandard
+BRS=False
+Len=32
+CycleTime=10
+Var=RWA_ActiveState bit 47,1 -m
+[UDS_DiagResp_RWA]
+ID=71Dh
+Type=FDStandard
+BRS=False
+Len=64
+Var=UDS_DiagResp_RWA unsigned 0,64 -m
+[ADC_3]
+ID=163h
+Type=FDStandard
+BRS=False
+Len=32
+CycleTime=10
+Var=ADC_0x163_CheckSum unsigned 0,16 -m
+Var=ADC_0x163_RollingCounter unsigned 16,8 -m
+Var=ADC_PinionAgEna unsigned 24,2 -m
+Var=ADC_PinionAgCmd unsigned 64,16 -m /f:0.0625 /o:-780 /max:780 /d:0
+[UDS_PhyDiagReq_RWA]
+ID=715h
+Type=FDStandard
+BRS=False
+Len=64
+Var=UDS_PhyDiagReq_RWA unsigned 0,64 -m

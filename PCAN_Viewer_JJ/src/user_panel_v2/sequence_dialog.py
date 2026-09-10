@@ -4,6 +4,8 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTa
     QTableWidgetItem, QComboBox, QLineEdit, QSpinBox, QLabel, QMessageBox, QCheckBox, QHeaderView)
 from src.tx_panel import TxPacketDialog
 from .sequence import validate_steps, format_can_id
+from .inline_editor import show_inline_editor
+from .packets import RegisteredCommandDialog
 
 
 def bit_text(data, mask):
@@ -144,6 +146,14 @@ class SequencePacketDialog(TxPacketDialog):
             packet = self.get_packet_data()
             mask = self.comparison(packet)[0] if self.receive_mode else [255] * packet['length']
             dlg = BitsDialog(packet['data'], mask, self.receive_mode, self)
+            if getattr(self, '_inline_editing', False):
+                def apply_bits():
+                    self.saved_mask = dlg.mask
+                    self.edit_data.setText(' '.join(f'{b:02X}' for b in dlg.data))
+                    self.on_data_edited()
+                    self._mark_signals()
+                show_inline_editor(self, dlg, apply_bits)
+                return
             if dlg.exec_() == dlg.Accepted:
                 self.saved_mask = dlg.mask
                 self.edit_data.setText(' '.join(f'{b:02X}' for b in dlg.data))
@@ -176,12 +186,13 @@ class SequencePacketDialog(TxPacketDialog):
 
 
 class SequenceDialog(QDialog):
-    def __init__(self, db_messages, steps, parent=None):
+    def __init__(self, db_messages, steps, parent=None, tx_packets=None):
         super().__init__(parent)
         self.setWindowTitle("명령 시퀀스 설정")
         self.resize(850, 480)
         self.db_messages = db_messages
         self.steps = copy.deepcopy(steps) or [dict(kind='CMD')]
+        self.tx_packets = tx_packets
         layout = QVBoxLayout(self)
         toolbar = QHBoxLayout()
         for title, action in (("생성", self.add), ("삭제", self.delete),
@@ -264,6 +275,33 @@ class SequenceDialog(QDialog):
 
     def edit(self, row, bits=False):
         step = self.steps[row]
+        if getattr(self, '_inline_editing', False):
+            if step['kind'] == 'DEL':
+                from PyQt5.QtWidgets import QInputDialog
+                dlg = QInputDialog(self)
+                dlg.setInputMode(QInputDialog.IntInput)
+                dlg.setLabelText("대기시간 (ms)")
+                dlg.setIntRange(0, 600000)
+                dlg.setIntValue(step.get('delay_ms', 0))
+                def apply_detail():
+                    value = dlg.intValue()
+                    self.steps[row] = dict(kind='DEL', delay_ms=value, summary=f'{value} ms', name=step.get('name', ''))
+                    self.refresh(row)
+            elif bits:
+                dlg = BitsDialog(step['packet']['data'], step['mask'], True, self)
+                def apply_detail():
+                    step['packet']['data'], step['mask'] = dlg.data, dlg.mask
+                    step['summary'] = bit_text(dlg.data, dlg.mask)
+                    self.refresh(row)
+            else:
+                dlg = (RegisteredCommandDialog(self.tx_packets, step, self) if step['kind'] == 'CMD' and self.tx_packets is not None
+                       else SequencePacketDialog(self.db_messages, step, self))
+                def apply_detail():
+                    dlg.result_step['name'] = step.get('name', '')
+                    self.steps[row] = dlg.result_step
+                    self.refresh(row)
+            show_inline_editor(self, dlg, apply_detail)
+            return
         if step['kind'] == 'DEL':
             from PyQt5.QtWidgets import QInputDialog
             value, ok = QInputDialog.getInt(self, "DEL", "대기시간 (ms)", step.get('delay_ms', 0), 0, 600000)
@@ -278,7 +316,8 @@ class SequenceDialog(QDialog):
                 step['packet']['data'], step['mask'] = dlg.data, dlg.mask
                 step['summary'] = bit_text(dlg.data, dlg.mask)
         else:
-            dlg = SequencePacketDialog(self.db_messages, step, self)
+            dlg = (RegisteredCommandDialog(self.tx_packets, step, self) if step['kind'] == 'CMD' and self.tx_packets is not None
+                   else SequencePacketDialog(self.db_messages, step, self))
             if dlg.exec_() == dlg.Accepted:
                 dlg.result_step['name'] = step.get('name', '')
                 self.steps[row] = dlg.result_step
