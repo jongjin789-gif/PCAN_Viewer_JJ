@@ -57,6 +57,7 @@ class WidgetConfigDialog(QDialog):
         self._config_id = str(uuid.uuid4())
         self._enum_entries = []
         self.sequence_steps = []
+        self.sequence_failure_steps = []
 
         self._build_ui()
         self._load_db_messages()
@@ -565,16 +566,19 @@ class WidgetConfigDialog(QDialog):
 
     def _edit_sequence(self):
         from .sequence_dialog import SequenceDialog
-        dlg = SequenceDialog(self.db_messages, self.sequence_steps, self, tx_packets=self.tx_packets)
+        dlg = SequenceDialog(self.db_messages, self.sequence_steps, self, tx_packets=self.tx_packets,
+                             failure_steps=self.sequence_failure_steps)
         if self.embedded:
             from .inline_editor import show_inline_editor
             def apply_steps():
                 self.sequence_steps = copy.deepcopy(dlg.steps)
+                self.sequence_failure_steps = copy.deepcopy(dlg.failure_steps)
                 self._on_any_changed()
             show_inline_editor(self, dlg, apply_steps)
             return
         if dlg.exec_() == dlg.Accepted:
             self.sequence_steps = copy.deepcopy(dlg.steps)
+            self.sequence_failure_steps = copy.deepcopy(dlg.failure_steps)
             self._on_any_changed()
 
     def _refresh_widget_types(self, *_args):
@@ -994,6 +998,7 @@ class WidgetConfigDialog(QDialog):
             from .sequence import validate_steps
             try:
                 validate_steps(self.sequence_steps)
+                validate_steps(self.sequence_failure_steps, actions_only=True, allow_empty=True)
             except ValueError as exc:
                 QMessageBox.warning(self, "Sequence", str(exc))
                 return None
@@ -1041,6 +1046,7 @@ class WidgetConfigDialog(QDialog):
                 "max": self._round_value(max_v),
                 "tx_resolution": float(self.spin_resolution.value()),
                 "sequence_steps": copy.deepcopy(self.sequence_steps),
+                "sequence_failure_steps": copy.deepcopy(self.sequence_failure_steps),
                 "tx_initial_value": float(self.spin_slider_initial.value()),
                 "tx_press_value": self._round_value(self._value_from_editor(self.spin_press_value, self.combo_press_enum)),
                 "tx_release_value": self._round_value(self._value_from_editor(self.spin_release_value, self.combo_release_enum)),
@@ -1094,6 +1100,7 @@ class WidgetConfigDialog(QDialog):
 
         binding = config.get("binding", {})
         self.sequence_steps = copy.deepcopy(binding.get("sequence_steps", []))
+        self.sequence_failure_steps = copy.deepcopy(binding.get('sequence_failure_steps', []))
         precision_decimals = int(binding.get("value_precision_decimals", 3) or 3)
         idx_precision = self.combo_value_precision.findData(precision_decimals)
         self.combo_value_precision.setCurrentIndex(idx_precision if idx_precision >= 0 else 0)

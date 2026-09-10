@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 
 import can
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QTextCursor, QTextCharFormat
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QTextEdit, QAction
 from src.crc_utils import calculate_crc16_ccitt_false
@@ -16,11 +16,17 @@ def format_can_id(packet):
     return f"0x{can_id:0{width}X}"
 
 
-def validate_steps(steps):
-    if not steps:
+def validate_steps(steps, actions_only=False, allow_empty=False):
+    if not steps and not allow_empty:
         raise ValueError("Sequence has no steps.")
     for index, step in enumerate(steps, 1):
         kind = step.get("kind")
+        if actions_only and kind == 'RCV':
+            raise ValueError('Init/실패 처리에는 수신 비교(RCV)를 사용할 수 없습니다.')
+        if kind in ('START', 'STOP'):
+            if not isinstance(step.get('target_packet_id'), str) or not step['target_packet_id']:
+                raise ValueError(f'Step {index}: 시작/정지할 등록 패킷을 선택하세요.')
+            continue
         if kind == "DEL":
             if not 0 <= int(step.get("delay_ms", -1)) <= 600000:
                 raise ValueError(f"Step {index}: invalid delay.")
@@ -53,12 +59,15 @@ def validate_steps(steps):
 
 
 class SequenceControl(QWidget):
+    finished = pyqtSignal(bool)
     COLORS = {"ready": "#245A81", "run": "#00695C", "receive": "#F2B544",
               "delay": "#6A4594", "stop": "#59636E", "done": "#237541", "error": "#B3261E"}
     def __init__(self, owner, cfg):
         super().__init__()
         self.owner, self.cfg = owner, cfg
         self.running = False
+        self.in_failure = False
+        self.failure_steps = []
         self.index = -1
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
@@ -106,6 +115,8 @@ class SequenceControl(QWidget):
         bus = f"BUS_{p['bus']}" if p else "-"
         can_id = format_can_id(p) if p else "-"
         name = step.get('name', '').strip() or "이름 없음"
+        if step['kind'] in ('START', 'STOP'):
+            name += ' · ' + step.get('summary', step.get('target_packet_id', ''))
         return f"{self.index + 1}/{len(self.steps)} {step['kind']} {bus} {can_id} {name} · {status}"
 
     def stop(self, reason="사용자 정지"):
@@ -116,11 +127,26 @@ class SequenceControl(QWidget):
         if was_running:
             self.write(reason)
             self._state("stop", "정지됨 · 재실행")
+            self.finished.emit(False)
 
     def fail(self, message):
-        self.stop("실행 중단")
+        self.timer.stop()
+        self.watchdog.stop()
         self.write(message, "#B3261E")
-        self._state("error", "오류 · 재실행")
+        if (not self.in_failure and self.failure_steps and self.owner.mode == 'run'
+                and self.owner.isVisible()):
+            self.in_failure = True
+            self.steps = copy.deepcopy(self.failure_steps)
+            self.index = -1
+            self.running = True
+            self.required_buses = set()
+            self.write('NG · 실패 처리 명령 시작', '#B3261E')
+            self.watchdog.start()
+            self._next()
+            return
+        self.running = False
+        self._state("error", "NG · 재실행")
+        self.finished.emit(False)
 
     def _check_connection(self):
         if not self.running:
@@ -136,16 +162,25 @@ class SequenceControl(QWidget):
             return
         if self.owner.mode != "run":
             return
+        if getattr(self.owner, '_init_running', False) and not self.cfg.get('is_init'):
+            self.write('Init 실행 중에는 일반 시퀀스를 시작할 수 없습니다.')
+            return
+        self.in_failure = False
+        self.failure_steps = []
         try:
             self.steps = copy.deepcopy(self.cfg.get("binding", {}).get("sequence_steps", []))
+            failures = copy.deepcopy(self.cfg.get('binding', {}).get('sequence_failure_steps', []))
+            validate_steps(self.steps, actions_only=self.cfg.get('is_init', False))
+            validate_steps(failures, actions_only=True, allow_empty=True)
             if hasattr(self.owner, 'tx_packets'):
                 from .packets import validate_tool
-                validate_tool(self.owner.tx_packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=self.steps)))
-            validate_steps(self.steps)
+                validate_tool(self.owner.tx_packets, dict(behavior='tx', widget_type='sequence',
+                              binding=dict(sequence_steps=self.steps, sequence_failure_steps=failures)))
+            self.failure_steps = failures
             main = self.owner.main_window
-            self.required_buses = {s["packet"]["bus"] for s in self.steps if s["kind"] != "DEL"}
+            self.required_buses = {s["packet"]["bus"] for s in self.steps if s["kind"] in ('CMD', 'RCV')}
             for s in self.steps:
-                if s["kind"] == "DEL":
+                if s["kind"] not in ('CMD', 'RCV'):
                     continue
                 p = s["packet"]
                 if main.buses.get(p["bus"]) is None:
@@ -171,12 +206,21 @@ class SequenceControl(QWidget):
         if self.index == len(self.steps):
             self.running = False
             self.watchdog.stop()
-            self.write("전체 과정 완료", "#237541")
-            self._state("done", "완료 · 재실행")
+            success = not self.in_failure
+            self.write("전체 과정 완료 · OK" if success else '실패 처리 완료 · 원래 시퀀스 NG', '#237541' if success else '#B3261E')
+            self._state("done" if success else 'error', "OK · 재실행" if success else 'NG · 재실행')
+            self.finished.emit(success)
             return
         step = self.steps[self.index]
         kind = step["kind"]
-        if kind == "CMD":
+        if kind in ('START', 'STOP'):
+            try:
+                self.owner.set_packet_transmission(step['target_packet_id'], kind == 'START')
+                self.write(self.step_log('주기 전송 시작' if kind == 'START' else '주기 전송 정지'))
+                self.timer.start(0)
+            except Exception as exc:
+                self.fail(self.step_log(str(exc)))
+        elif kind == "CMD":
             self._state("run", "실행 중 · 정지")
             self.remaining = int(step.get("repeat", 1))
             self.response_floor = time.time()
@@ -243,7 +287,7 @@ class SequenceControl(QWidget):
             self._next()
 
     def receive(self, ts, bus, can_id, data, extended, fd, brs=False):
-        if not self.running or ts < max(self.started, getattr(self, "response_floor", self.started)):
+        if self.in_failure or not self.running or ts < max(self.started, getattr(self, "response_floor", self.started)):
             return
         idx = self.index
         if self.steps[idx]["kind"] == "CMD":

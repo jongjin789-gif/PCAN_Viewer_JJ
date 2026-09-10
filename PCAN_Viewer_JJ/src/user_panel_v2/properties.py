@@ -15,7 +15,8 @@ class ToolProperties(QWidget):
     @staticmethod
     def bound_buses(cfg):
         if cfg.get("widget_type") == "sequence":
-            return {int(s["packet"]["bus"]) for s in cfg.get("binding", {}).get("sequence_steps", []) if s.get("packet")}
+            binding = cfg.get('binding', {})
+            return {int(s["packet"]["bus"]) for s in binding.get("sequence_steps", []) + binding.get('sequence_failure_steps', []) if s.get("packet")}
         return {int(cfg.get("binding", {}).get("bus", 1))} if cfg.get("behavior") in ("tx", "rx") else set()
 
     def __init__(self, panel):

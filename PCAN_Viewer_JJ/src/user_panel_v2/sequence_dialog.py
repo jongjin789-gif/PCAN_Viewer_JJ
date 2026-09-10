@@ -8,6 +8,28 @@ from .inline_editor import show_inline_editor
 from .packets import RegisteredCommandDialog
 
 
+class PacketActionDialog(QDialog):
+    def __init__(self, packets, step, parent=None):
+        super().__init__(parent)
+        self.kind = step['kind']
+        self.setWindowTitle('주기 패킷 시작 / 정지')
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel('등록 패킷의 주기 전송만 제어합니다. CMD 송신은 유지됩니다.'))
+        self.target = QComboBox()
+        self.target.addItem('전체 등록 패킷', '*')
+        for p in packets or []:
+            self.target.addItem(f"BUS {p['bus']} · 0x{p['id']:X} · {p.get('symbol', 'N/A')}", p['packet_id'])
+        self.target.setCurrentIndex(max(0, self.target.findData(step.get('target_packet_id', '*'))))
+        layout.addWidget(self.target)
+        button = QPushButton('OK')
+        button.clicked.connect(self.accept)
+        layout.addWidget(button)
+
+    def accept(self):
+        self.result_step = dict(kind=self.kind, target_packet_id=self.target.currentData(), summary=self.target.currentText())
+        super().accept()
+
+
 def bit_text(data, mask):
     lines = []
     for i, (value, selected) in enumerate(zip(data, mask)):
@@ -186,13 +208,17 @@ class SequencePacketDialog(TxPacketDialog):
 
 
 class SequenceDialog(QDialog):
-    def __init__(self, db_messages, steps, parent=None, tx_packets=None):
+    def __init__(self, db_messages, steps, parent=None, tx_packets=None,
+                 actions_only=False, allow_empty=False, failure_steps=None, allow_failure=True):
         super().__init__(parent)
         self.setWindowTitle("명령 시퀀스 설정")
         self.resize(850, 480)
         self.db_messages = db_messages
-        self.steps = copy.deepcopy(steps) or [dict(kind='CMD')]
+        self.steps = copy.deepcopy(steps) if steps or allow_empty else [dict(kind='CMD')]
         self.tx_packets = tx_packets
+        self.actions_only = actions_only
+        self.allow_empty = allow_empty
+        self.failure_steps = copy.deepcopy(failure_steps or [])
         layout = QVBoxLayout(self)
         toolbar = QHBoxLayout()
         for title, action in (("생성", self.add), ("삭제", self.delete),
@@ -201,6 +227,12 @@ class SequenceDialog(QDialog):
             button.clicked.connect(action)
             toolbar.addWidget(button)
         layout.addLayout(toolbar)
+        hint = QLabel('CMD: 송신 · DEL: 대기 · START/STOP: 주기 시작/정지' + ('' if actions_only else ' · RCV: 수신 비교'))
+        layout.addWidget(hint)
+        self.btn_failure = QPushButton(f'실패 시 실행할 명령 설정 ({len(self.failure_steps)}단계)')
+        self.btn_failure.clicked.connect(self.edit_failure_steps)
+        self.btn_failure.setVisible(allow_failure and not actions_only)
+        layout.addWidget(self.btn_failure)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["종류", "생성 / 편집", "명령어 / 응답 이름", "명령어 뷰어"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -220,11 +252,11 @@ class SequenceDialog(QDialog):
         for row, step in enumerate(self.steps):
             self.table.insertRow(row)
             combo = QComboBox()
-            combo.addItems(['CMD', 'RCV', 'DEL'])
+            combo.addItems(['CMD', 'DEL', 'START', 'STOP'] if self.actions_only else ['CMD', 'RCV', 'DEL', 'START', 'STOP'])
             combo.setCurrentText(step['kind'])
             combo.currentTextChanged.connect(lambda kind, r=row: self.change(r, kind))
             self.table.setCellWidget(row, 0, combo)
-            button = QPushButton("시간 설정" if step['kind'] == 'DEL' else "패킷 생성 / 편집")
+            button = QPushButton("시간 설정" if step['kind'] == 'DEL' else ('대상 패킷 선택' if step['kind'] in ('START', 'STOP') else "패킷 생성 / 편집"))
             button.clicked.connect(lambda _, r=row: self.edit(r))
             self.table.setCellWidget(row, 1, button)
             name = QLineEdit(step.get('name', ''))
@@ -273,6 +305,25 @@ class SequenceDialog(QDialog):
         self.steps[row] = dict(kind=kind, name=self.steps[row].get('name', ''))
         self.refresh(row)
 
+    def edit_failure_steps(self):
+        dialog = SequenceDialog(self.db_messages, self.failure_steps, self, self.tx_packets,
+                                actions_only=True, allow_empty=True, allow_failure=False)
+        dialog.setWindowTitle('실패 시 실행할 명령 (수신 비교 없음)')
+        def apply():
+            self.failure_steps = copy.deepcopy(dialog.steps)
+            self.btn_failure.setText(f'실패 시 실행할 명령 설정 ({len(self.failure_steps)}단계)')
+        if getattr(self, '_inline_editing', False):
+            show_inline_editor(self, dialog, apply)
+        elif dialog.exec_() == dialog.Accepted:
+            apply()
+
+    def detail_dialog(self, step):
+        if step['kind'] in ('START', 'STOP'):
+            return PacketActionDialog(self.tx_packets, step, self)
+        if step['kind'] == 'CMD' and self.tx_packets is not None:
+            return RegisteredCommandDialog(self.tx_packets, step, self)
+        return SequencePacketDialog(self.db_messages, step, self)
+
     def edit(self, row, bits=False):
         step = self.steps[row]
         if getattr(self, '_inline_editing', False):
@@ -294,8 +345,7 @@ class SequenceDialog(QDialog):
                     step['summary'] = bit_text(dlg.data, dlg.mask)
                     self.refresh(row)
             else:
-                dlg = (RegisteredCommandDialog(self.tx_packets, step, self) if step['kind'] == 'CMD' and self.tx_packets is not None
-                       else SequencePacketDialog(self.db_messages, step, self))
+                dlg = self.detail_dialog(step)
                 def apply_detail():
                     dlg.result_step['name'] = step.get('name', '')
                     self.steps[row] = dlg.result_step
@@ -316,8 +366,7 @@ class SequenceDialog(QDialog):
                 step['packet']['data'], step['mask'] = dlg.data, dlg.mask
                 step['summary'] = bit_text(dlg.data, dlg.mask)
         else:
-            dlg = (RegisteredCommandDialog(self.tx_packets, step, self) if step['kind'] == 'CMD' and self.tx_packets is not None
-                   else SequencePacketDialog(self.db_messages, step, self))
+            dlg = self.detail_dialog(step)
             if dlg.exec_() == dlg.Accepted:
                 dlg.result_step['name'] = step.get('name', '')
                 self.steps[row] = dlg.result_step
@@ -325,7 +374,12 @@ class SequenceDialog(QDialog):
 
     def accept(self):
         try:
-            validate_steps(self.steps)
+            validate_steps(self.steps, actions_only=self.actions_only, allow_empty=self.allow_empty)
+            validate_steps(self.failure_steps, actions_only=True, allow_empty=True)
+            if self.tx_packets is not None:
+                from .packets import validate_tool
+                validate_tool(self.tx_packets, dict(behavior='tx', widget_type='sequence',
+                              binding=dict(sequence_steps=self.steps, sequence_failure_steps=self.failure_steps)))
             super().accept()
         except Exception as exc:
             QMessageBox.warning(self, "Sequence", str(exc))

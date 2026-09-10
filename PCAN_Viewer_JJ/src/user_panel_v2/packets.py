@@ -46,11 +46,27 @@ def bind_packet(binding, packet):
     binding.pop('tx_cycle_ms', None)
 
 
+def references_packet(steps, packet):
+    for step in steps:
+        if step.get('kind') in ('START', 'STOP') and step.get('target_packet_id') == packet['packet_id']:
+            return True
+        if step.get('kind') == 'CMD':
+            p = step.get('packet', {})
+            if find_packet([packet], dict(packet_id=p.get('packet_id'), bus=p.get('bus', 1), can_id=p.get('id', 0))):
+                return True
+    return False
+
+
 def validate_tool(packets, cfg):
     if cfg.get('behavior') != 'tx':
         return
     if cfg.get('widget_type') == 'sequence':
-        for step in cfg.get('binding', {}).get('sequence_steps', []):
+        binding = cfg.get('binding', {})
+        for step in binding.get('sequence_steps', []) + binding.get('sequence_failure_steps', []):
+            if step.get('kind') in ('START', 'STOP'):
+                target = step.get('target_packet_id')
+                if target != '*' and not any(p['packet_id'] == target for p in packets):
+                    raise ValueError('시퀀스 시작/정지 대상 패킷이 등록되어 있지 않습니다.')
             if step.get('kind') == 'CMD':
                 p = step.get('packet', {})
                 packet = find_packet(packets, dict(packet_id=p.get('packet_id'), bus=p.get('bus', 1), can_id=p.get('id', 0)))
@@ -216,6 +232,13 @@ class PacketRegistryDialog(QDialog):
         row = self.list.currentRow()
         if row >= 0:
             packet = self.packets[row]
+            steps = list(getattr(self.panel, 'init_steps', []))
+            for cfg in self.panel.widgets_config:
+                binding = cfg.get('binding', {})
+                steps += binding.get('sequence_steps', []) + binding.get('sequence_failure_steps', [])
+            if references_packet(steps, packet):
+                QMessageBox.warning(self, '패킷 삭제', 'Init/시퀀스/실패 처리에서 참조하는 패킷입니다. 해당 명령을 먼저 변경하세요.')
+                return
             if any(c.get('behavior') == 'tx' and find_packet([packet], c.get('binding', {})) for c in self.panel.widgets_config):
                 QMessageBox.warning(self, '패킷 삭제', '연결된 TX 도구를 먼저 삭제하거나 다른 패킷에 연결하세요.')
                 return

@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .config_dialog import WidgetConfigDialog
-from .sequence import SequenceControl
+from .sequence import SequenceControl, validate_steps
 from .mode_security import verify_edit_password
 from .storage import PACKAGE_EXT, load_bundle, load_panel_json, save_bundle, save_panel_json
 from .styles import TOOL_STYLE, lamp_style
@@ -103,6 +103,9 @@ class UserPanelWindow(QWidget):
 
         self.widgets_config = []
         self.tx_packets = []
+        self.init_steps = []
+        self._init_running = False
+        self._paused_packets = set()
         self._packet_runtimes = {}
         self.widget_frames = {}
         self.widget_controls = {}
@@ -161,6 +164,8 @@ class UserPanelWindow(QWidget):
         self.btn_add_tx = QPushButton("Add TX Tool")
         self.btn_packets = QPushButton("TX 패킷 등록 / 관리")
         self.btn_packets.clicked.connect(self.manage_tx_packets)
+        self.btn_init = QPushButton('RUN Init 시퀀스 설정')
+        self.btn_init.clicked.connect(self.edit_init_sequence)
         self.btn_add_rx = QPushButton("Add RX Tool")
         self.btn_add_misc = QPushButton("Add Group/Shape")
 
@@ -176,6 +181,7 @@ class UserPanelWindow(QWidget):
         root.addLayout(controls)
         controls = QHBoxLayout()
         controls.addWidget(self.btn_packets)
+        controls.addWidget(self.btn_init)
         controls.addWidget(self.btn_add_tx)
         controls.addWidget(self.btn_add_rx)
         controls.addWidget(self.btn_add_misc)
@@ -187,6 +193,12 @@ class UserPanelWindow(QWidget):
         self.label_mode = QLabel()
         self.label_mode.setWordWrap(True)
         root.addWidget(self.label_mode)
+        self.init_control = SequenceControl(self, dict(title='RUN Init', is_init=True, binding={}))
+        self.init_control.setMaximumHeight(150)
+        self.init_control.button.setEnabled(False)
+        self.init_control.finished.connect(self._init_finished)
+        self.init_control.hide()
+        root.addWidget(self.init_control)
 
         self.label_key_help = QLabel(
             "Move: Arrow keys | Resize: Shift+Arrow | Delete: Del | Undo: Ctrl+Z | Redo: Ctrl+Y (50 steps) | EDIT only"
@@ -434,7 +446,9 @@ class UserPanelWindow(QWidget):
         if dialog.exec_() != dialog.Accepted:
             return
         configs = copy.deepcopy(self.widgets_config)
+        init_steps = copy.deepcopy(self.init_steps)
         try:
+            validate_tool(dialog.packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=init_steps)))
             for cfg in configs:
                 validate_tool(dialog.packets, cfg)
         except ValueError as exc:
@@ -442,9 +456,62 @@ class UserPanelWindow(QWidget):
             return
         self.tx_packets = dialog.packets
         self.widgets_config = configs
+        self.init_steps = init_steps
         self._packet_runtimes.clear()
         self.rebuild_grid()
         self.properties.refresh(force=True)
+
+    def edit_init_sequence(self):
+        if self.mode != 'edit':
+            return
+        from .sequence_dialog import SequenceDialog
+        dialog = SequenceDialog(self.db_messages, self.init_steps, self, self.tx_packets,
+                                actions_only=True, allow_empty=True, allow_failure=False)
+        dialog.setWindowTitle('RUN Init 시퀀스 (비우면 사용 안함)')
+        if dialog.exec_() == dialog.Accepted:
+            self.init_steps = copy.deepcopy(dialog.steps)
+            if not self.init_steps:
+                self.init_control.hide()
+            self._record_history()
+
+    def _init_finished(self, success):
+        if not self._init_running:
+            return
+        self._init_running = False
+        if not success:
+            self.mode = 'standby'
+            self.refresh_mode_ui()
+            self.label_mode.setText('Init NG / 중단: STANDARD로 전환했습니다. 로그를 확인하세요.')
+            return
+        self.label_mode.setText('RUN: Init OK · 정지 지정되지 않은 등록 패킷 주기 전송')
+        self._set_init_tool_state()
+        self._sync_frame_timers_from_configs()
+
+    def _set_init_tool_state(self):
+        for cfg in self.widgets_config:
+            if cfg.get('behavior') == 'tx':
+                ctrl = self.widget_controls.get(cfg.get('id'))
+                if ctrl:
+                    ctrl.setEnabled(not self._init_running)
+
+    def set_packet_transmission(self, packet_id, enabled):
+        if self.mode != 'run':
+            raise ValueError('RUN에서만 주기 전송을 제어할 수 있습니다.')
+        targets = {p['packet_id'] for p in self.tx_packets}
+        if packet_id != '*':
+            if packet_id not in targets:
+                raise ValueError('시작/정지 대상 패킷이 등록되어 있지 않습니다.')
+            targets = {packet_id}
+        if enabled:
+            self._paused_packets.difference_update(targets)
+        else:
+            self._paused_packets.update(targets)
+            for target in targets:
+                timer = self._frame_timers.pop(target, None)
+                if timer:
+                    timer.stop()
+                    timer.deleteLater()
+        self._sync_frame_timers_from_configs()
 
     def _report_packet_error(self, exc):
         self.label_mode.setText(f'TX 패킷 오류: {exc}')
@@ -452,6 +519,8 @@ class UserPanelWindow(QWidget):
             self.main_window.statusBar().showMessage(f'User panel TX: {exc}', 6000)
 
     def _prepare_registered_packets(self):
+        validate_steps(self.init_steps, actions_only=True, allow_empty=True)
+        validate_tool(self.tx_packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=self.init_steps)))
         for cfg in self.widgets_config:
             validate_tool(self.tx_packets, cfg)
         runtimes = {}
@@ -509,9 +578,21 @@ class UserPanelWindow(QWidget):
                 QMessageBox.warning(self, 'TX 패킷', str(exc))
                 return
         self.mode = new_mode
+        if new_mode == 'run':
+            self._paused_packets.clear()
+            self._init_running = bool(self.init_steps)
+            self.init_control.setVisible(bool(self.init_steps))
         self.refresh_mode_ui()
+        if new_mode == 'run' and self.init_steps:
+            self.init_control.cfg['binding'] = dict(sequence_steps=copy.deepcopy(self.init_steps))
+            self.init_control.show()
+            self.label_mode.setText('RUN: Init 실행 중 · 등록 패킷 주기 전송 대기')
+            self.init_control.toggle()
 
     def stop_panel_commands(self, reason="패널 정지"):
+        self._init_running = False
+        if hasattr(self, 'init_control'):
+            self.init_control.stop(reason)
         self._stop_all_frame_timers()
         for ctrl in self.widget_controls.values():
             if isinstance(ctrl, SequenceControl):
@@ -557,6 +638,8 @@ class UserPanelWindow(QWidget):
         for item in getattr(self, "_edit_mode_actions", []):
             item.setEnabled(is_edit)
         self.btn_packets.setEnabled(is_edit)
+        self.btn_init.setEnabled(is_edit)
+        self._set_init_tool_state()
 
         self.act_sim_auto.blockSignals(True)
         self.act_sim_auto.setChecked(self.btn_sim_auto.isChecked())
@@ -578,6 +661,7 @@ class UserPanelWindow(QWidget):
     def _history_snapshot(self):
         return dict(widgets=copy.deepcopy(self.widgets_config),
                     tx_packets=copy.deepcopy(self.tx_packets),
+                    init_steps=copy.deepcopy(self.init_steps),
                     selected=self.selected_widget_id, ids=set(self.selected_widget_ids))
 
     def _reset_history(self):
@@ -616,6 +700,7 @@ class UserPanelWindow(QWidget):
             self._drag_target_id = None
             self.widgets_config = copy.deepcopy(state["widgets"])
             self.tx_packets = copy.deepcopy(state.get('tx_packets', []))
+            self.init_steps = copy.deepcopy(state.get('init_steps', []))
             for cfg in self.widgets_config:
                 reconcile_binding(self.db_messages, cfg.get("binding", {}))
             self.selected_widget_id = state["selected"]
@@ -1815,7 +1900,7 @@ class UserPanelWindow(QWidget):
                     ctrl.blockSignals(was_blocked)
 
     def _emit_tx(self, cfg, value):
-        if self.mode != "run" or not self.isVisible() or cfg.get("behavior") != "tx":
+        if self.mode != "run" or self._init_running or not self.isVisible() or cfg.get("behavior") != "tx":
             return
         try:
             packet = find_packet(self.tx_packets, cfg.get("binding", {}))
@@ -1835,7 +1920,7 @@ class UserPanelWindow(QWidget):
         )
 
     def _flush_frame(self, packet_id):
-        if self.mode != "run" or not self.isVisible():
+        if self.mode != "run" or self._init_running or packet_id in self._paused_packets or not self.isVisible():
             return
         try:
             self._packet_runtimes[packet_id].send()
@@ -1856,12 +1941,12 @@ class UserPanelWindow(QWidget):
         self._frame_timers.clear()
 
     def _sync_frame_timers_from_configs(self):
-        if self.mode != "run":
+        if self.mode != "run" or self._init_running:
             self._stop_all_frame_timers()
             return
         for packet in self.tx_packets:
             key = packet['packet_id']
-            if packet['cycle'] <= 0 or key in self._frame_timers:
+            if packet['cycle'] <= 0 or key in self._paused_packets or key in self._frame_timers:
                 continue
             timer = QTimer(self)
             timer.setTimerType(Qt.PreciseTimer)
@@ -2128,8 +2213,9 @@ class UserPanelWindow(QWidget):
 
     def _panel_data(self):
         return {
-            "version": 3,
+            "version": 4,
             "tx_packets": copy.deepcopy(self.tx_packets),
+            "init_steps": copy.deepcopy(self.init_steps),
             "grid": {"rows": self.grid_rows, "cols": self.grid_cols, "cell_size": self.grid_cell_size},
             "mode": self.mode,
             "widgets": self.widgets_config,
@@ -2165,6 +2251,8 @@ class UserPanelWindow(QWidget):
         self.stop_panel_commands('패널 불러오기')
         self._packet_runtimes.clear()
         self.tx_packets = copy.deepcopy(data.get('tx_packets', []))
+        self.init_steps = copy.deepcopy(data.get('init_steps', []))
+        validate_steps(self.init_steps, actions_only=True, allow_empty=True)
         for packet in self.tx_packets:
             packet.setdefault('packet_id', str(uuid.uuid4()))
 
