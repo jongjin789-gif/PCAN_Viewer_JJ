@@ -2,8 +2,9 @@
 import copy
 import uuid
 import can
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QListWidget, QDialogButtonBox, QMessageBox, QComboBox, QSpinBox, QLabel)
+                             QListWidget, QDialogButtonBox, QMessageBox, QComboBox, QSpinBox, QLabel, QCheckBox)
 from src.tx_panel import TxPacketDialog
 from src.tx_counter import counter_payload
 from src.crc_utils import calculate_crc16_ccitt_false
@@ -73,6 +74,9 @@ def validate_tool(packets, cfg):
                 if packet is None:
                     raise ValueError('시퀀스 CMD는 등록한 TX 패킷을 선택하세요.')
                 step['packet'] = copy.deepcopy(packet)
+                if 'data_override' in step:
+                    validate_command_data(step['data_override'], packet['length'])
+                    step['packet']['data'] = list(step['data_override'])
         return
     binding = cfg['binding']
     packet = find_packet(packets, binding)
@@ -80,6 +84,11 @@ def validate_tool(packets, cfg):
         raise ValueError(f"{cfg.get('title', 'TX')}: 먼저 TX 패킷을 등록하고 도구에 연결하세요.")
     bind_packet(binding, packet)
     bit_positions(binding, packet['length'])
+
+
+def validate_command_data(data, length):
+    if not isinstance(data, (list, bytes, bytearray)) or len(data) != length or any(type(b) is not int or not 0 <= b <= 255 for b in data):
+        raise ValueError('CMD 전용 데이터 길이/HEX 값을 확인하세요. 등록 패킷 길이와 일치해야 합니다.')
 
 
 class PacketRuntime:
@@ -97,14 +106,16 @@ class PacketRuntime:
         self.overlay = updated
         return changed
 
-    def send(self):
+    def send(self, data_override=None):
         p = self.packet
         bus = getattr(self.main, 'buses', {}).get(p['bus'])
         if bus is None:
             raise ValueError(f"CAN BUS {p['bus']}가 연결되지 않았습니다.")
         if p['is_fd'] and not self.main.bus_capabilities[p['bus']].get('is_fd'):
             raise ValueError(f"CAN BUS {p['bus']}를 FD로 연결하세요.")
-        payload = bytes(self.overlay)
+        if data_override is not None:
+            validate_command_data(data_override, p['length'])
+        payload = bytes(self.overlay if data_override is None else data_override)
         states = self.states
         if p.get('signal_counters'):
             message = self.db_messages.get(p['bus'], {}).get(p['id'])
@@ -119,6 +130,9 @@ class PacketRuntime:
                               bitrate_switch=p.get('is_brs', False),
                               is_extended_id=p.get('is_extended_id', p['id'] > 0x7FF), check=True)
         bus.send(message)
+        # The last successful transmission becomes the current packet value.
+        # A failed CMD must not replace the value used by periodic transmission.
+        self.overlay = bytearray(payload)
         self.states = states
         self.alive = (self.alive + 1) % 256
         if hasattr(self.main, 'record_tx_activity'):
@@ -146,9 +160,10 @@ class RegisteredPacketDialog(TxPacketDialog):
 
 
 class RegisteredCommandDialog(QDialog):
-    def __init__(self, packets, step, parent=None):
+    def __init__(self, packets, step, parent=None, db_messages=None):
         super().__init__(parent)
-        self.setWindowTitle('등록 TX 패킷 선택')
+        self.setWindowTitle('CMD 패킷 / 값 편집')
+        self.resize(1060, 720)
         self.packets = packets
         layout = QVBoxLayout(self)
         self.combo = QComboBox()
@@ -156,6 +171,22 @@ class RegisteredCommandDialog(QDialog):
             self.combo.addItem(f"BUS {packet['bus']} · 0x{packet['id']:X} · {packet.get('symbol', 'N/A')}", packet['packet_id'])
         self.combo.setCurrentIndex(max(0, self.combo.findData(step.get('packet', {}).get('packet_id'))))
         layout.addWidget(self.combo)
+        self.use_values = QCheckBox('CMD 전용 값 사용 (HEX 또는 DBC Signals의 Value 편집)')
+        self.use_values.setChecked('data_override' in step or not step.get('packet'))
+        layout.addWidget(self.use_values)
+        layout.addWidget(QLabel('송신 성공한 CMD 값은 이후 주기 전송에도 유지됩니다. 체크 해제: 현재 패킷 값 사용. 카운트 → CRC 적용.'))
+        self.editor = TxPacketDialog(db_messages if db_messages is not None else getattr(parent, 'db_messages', {}), self)
+        self.editor.setWindowFlags(Qt.Widget)
+        self.editor.btn_ok.hide()
+        self.editor.btn_cancel.hide()
+        layout.addWidget(self.editor)
+        self.use_values.toggled.connect(self.editor.setEnabled)
+        self.editor.setEnabled(self.use_values.isChecked())
+        self.combo.currentIndexChanged.connect(self.load_packet)
+        self.load_packet()
+        if 'data_override' in step:
+            self.editor.edit_data.setText(' '.join(f'{b:02X}' for b in step['data_override']))
+            self.editor.on_data_edited()
         layout.addWidget(QLabel('반복 횟수 (간격은 등록 패킷의 딜레이 사용)'))
         self.repeat = QSpinBox()
         self.repeat.setRange(1, 10000)
@@ -166,13 +197,37 @@ class RegisteredCommandDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def load_packet(self):
+        if self.combo.currentIndex() < 0:
+            return
+        packet = copy.deepcopy(self.packets[self.combo.currentIndex()])
+        packet.setdefault('count', 0)
+        self.editor.set_packet_data(packet)
+        for widget in (self.editor.combo_bus, self.editor.edit_id, self.editor.combo_symbol,
+                       self.editor.combo_type, self.editor.combo_length, self.editor.check_brs,
+                       self.editor.crc_combo, self.editor.edit_cycle, self.editor.edit_note):
+            widget.setEnabled(False)
+        for col in (4, 5, 6):
+            self.editor.table_signals.setColumnHidden(col, True)
+
     def accept(self):
         if self.combo.currentIndex() < 0:
             QMessageBox.warning(self, 'TX 패킷', '먼저 TX 패킷을 등록하세요.')
             return
         packet = copy.deepcopy(self.packets[self.combo.currentIndex()])
+        override = None
+        if self.use_values.isChecked():
+            try:
+                override = list(bytes.fromhex(self.editor.edit_data.text()))
+                validate_command_data(override, packet['length'])
+            except ValueError as exc:
+                QMessageBox.warning(self, 'CMD 값', str(exc))
+                return
+            packet['data'] = override
         self.result_step = dict(kind='CMD', packet=packet, repeat=self.repeat.value(),
                                 summary=f"BUS {packet['bus']} · 0x{packet['id']:X} · {packet['cycle']} ms")
+        if override is not None:
+            self.result_step['data_override'] = override
         super().accept()
 
 

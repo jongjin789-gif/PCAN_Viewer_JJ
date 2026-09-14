@@ -57,7 +57,11 @@ class SequenceTest(unittest.TestCase):
         c = self.control([dict(kind='CMD', name='Init 명령', packet=p), dict(kind='RCV', name='Init 응답', packet=p, mask=[3]+[0]*7, timeout_ms=100), dict(kind='DEL', delay_ms=5)])
         c.toggle()
         c.receive(time.time(), 1, p['id'], p['data'], False, True)
-        QTest.qWait(50)
+        # Other GUI tests can leave deferred widget cleanup in the event queue.
+        # Wait for completion with a bound instead of assuming a 50 ms dispatch.
+        deadline = time.monotonic() + 1.0
+        while c.running and time.monotonic() < deadline:
+            QTest.qWait(10)
         self.assertFalse(c.running)
         self.assertIn('전체 과정 완료', c.log.toPlainText())
         self.assertEqual(len(self.sent), 1)

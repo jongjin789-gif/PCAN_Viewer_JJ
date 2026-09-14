@@ -3,15 +3,10 @@
     "tx_packets": [],
     "db_files": {
         "1": [
-            "D:/Project/.Common/Test/STM32F103C8T6_Board_Pedal/ACC_BRK_Pedal_V101.sym",
-            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/EMB/HL Mando_Rev2_EMB.sym",
-            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/ECM/HL Mando_Rev2_ECM.sym"
+            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/EMB/HL Mando_Rev2_EMB.sym"
         ],
         "2": [],
-        "3": [
-            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN3_ACC_BRK_Pedal_V101.sym",
-            "D:/Project/2026/M26002_VegaKit_InjeUniv/CAN3_Ioniq5_Steer_20260701.sym"
-        ]
+        "3": []
     },
     "can_config": {
         "1": {
@@ -19,7 +14,7 @@
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
             "data_bitrate": "2 MBit/s",
-            "is_open": true
+            "is_open": false
         },
         "2": {
             "channel": "PCAN-USB FD (0x51) [FD]",

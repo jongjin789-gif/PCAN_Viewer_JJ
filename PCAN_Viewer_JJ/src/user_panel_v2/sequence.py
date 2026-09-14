@@ -252,7 +252,7 @@ class SequenceControl(QWidget):
             p = self.steps[self.index]["packet"]
             if hasattr(self.owner, 'tx_packets'):
                 runtime = self.owner._packet_runtimes[p['packet_id']]
-                runtime.send()
+                runtime.send(data_override=self.steps[self.index].get('data_override'))
                 self.write(self.step_log("송신 완료"))
                 self.remaining -= 1
                 self.timer.start(int(p.get('cycle', 0)) if self.remaining else 0)

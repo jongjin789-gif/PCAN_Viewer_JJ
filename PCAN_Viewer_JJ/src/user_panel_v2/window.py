@@ -524,6 +524,7 @@ class UserPanelWindow(QWidget):
         for cfg in self.widgets_config:
             validate_tool(self.tx_packets, cfg)
         runtimes = {}
+        retained = set()
         keys = set()
         for p in self.tx_packets:
             validate_packet(p, self.db_messages)
@@ -531,7 +532,13 @@ class UserPanelWindow(QWidget):
             if key in keys or not 0 <= int(p.get('cycle', -1)) <= 600000:
                 raise ValueError('등록 패킷의 BUS/ID 중복 또는 딜레이 설정을 확인하세요.')
             keys.add(key)
-            runtimes[p['packet_id']] = PacketRuntime(p, self.db_messages, self.main_window)
+            previous = self._packet_runtimes.get(p['packet_id'])
+            if previous is not None and previous.packet == p:
+                previous.db_messages = self.db_messages
+                runtimes[p['packet_id']] = previous
+                retained.add(p['packet_id'])
+            else:
+                runtimes[p['packet_id']] = PacketRuntime(p, self.db_messages, self.main_window)
         # Initialize from the displayed tool values before the first periodic send.
         def is_checked_toggle(cfg):
             ctrl = self.widget_controls.get(cfg.get('id'))
@@ -540,6 +547,8 @@ class UserPanelWindow(QWidget):
             if cfg.get('behavior') != 'tx' or cfg.get('widget_type') == 'sequence':
                 continue
             binding = cfg['binding']
+            if binding['packet_id'] in retained:
+                continue
             ctrl = self.widget_controls.get(cfg['id'])
             kind = cfg.get('widget_type')
             if kind == 'slider':
