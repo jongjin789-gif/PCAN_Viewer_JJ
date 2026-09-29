@@ -18,6 +18,9 @@ class SignalGraphWindow(QWidget):
     def __init__(self, signal_names, main_window=None):
         super().__init__()
         self.signal_names = signal_names
+        self.signal_bindings = {}
+        self._bound_signals = {}
+        self.time_span = 30.0
         self.main_window = main_window  # 다른 그래프 창들과의 통신을 위해 메인 윈도우 참조
         self.formulas = {}
         
@@ -218,7 +221,13 @@ class SignalGraphWindow(QWidget):
             parent.open_combined_view()
 
     def _get_enum_string(self, sig_name, val):
-        """시그널 이름과 값을 받아 해당하는 Enum 텍스트가 있다면 반환"""
+        """시그널 이름과 값을 받아 해당하는 Enum 텍스트를 반환합니다."""
+        if sig_name in self._bound_signals:
+            choices = self._bound_signals[sig_name][1].choices
+            try:
+                return str(choices[int(val)]) if choices and int(val) in choices else None
+            except (ValueError, OverflowError):
+                return None
         if getattr(self, 'main_window', None) and hasattr(self.main_window, 'signal_choices'):
             if sig_name.startswith("B"):
                 parts = sig_name.split(":", 1)
@@ -1099,5 +1108,6 @@ class SignalGraphWindow(QWidget):
                 # setXRange는 내부적으로 Y축의 auto-range도 비활성화하므로,
                 # X축 범위를 수동으로 설정한 후 Y축은 데이터에 맞게 자동으로 조절되도록 다시 활성화합니다.
                 # 이렇게 하면 Combined View에서도 실시간 데이터 수신 시 Y축이 자동으로 조절됩니다.
-                self.plot_widget.setXRange(latest - 30.0, latest, padding=0)
-                self.plot_widget.enableAutoRange(axis='y')
+                auto_y = self.plot_widget.getViewBox().autoRangeEnabled()[1]
+                self.plot_widget.setXRange(latest - self.time_span, latest, padding=0)
+                self.plot_widget.enableAutoRange(axis='y', enable=auto_y)

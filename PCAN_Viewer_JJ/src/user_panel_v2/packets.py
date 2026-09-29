@@ -9,6 +9,7 @@ from src.tx_panel import TxPacketDialog
 from src.tx_counter import counter_payload
 from src.crc_utils import calculate_crc16_ccitt_false
 from .binding import pack_value, bit_positions
+from .masked_data import MaskedDataInput
 
 
 def validate_packet(packet, db_messages):
@@ -76,6 +77,8 @@ def validate_tool(packets, cfg):
                 step['packet'] = copy.deepcopy(packet)
                 if 'data_override' in step:
                     validate_command_data(step['data_override'], packet['length'])
+                    if 'data_mask' in step:
+                        validate_command_data(step['data_mask'], packet['length'])
                     step['packet']['data'] = list(step['data_override'])
         return
     binding = cfg['binding']
@@ -106,7 +109,7 @@ class PacketRuntime:
         self.overlay = updated
         return changed
 
-    def send(self, data_override=None):
+    def send(self, data_override=None, data_mask=None):
         p = self.packet
         bus = getattr(self.main, 'buses', {}).get(p['bus'])
         if bus is None:
@@ -116,6 +119,12 @@ class PacketRuntime:
         if data_override is not None:
             validate_command_data(data_override, p['length'])
         payload = bytes(self.overlay if data_override is None else data_override)
+        if data_mask is not None:
+            validate_command_data(data_mask, p['length'])
+            if data_override is None:
+                raise ValueError('CMD 마스크에는 송신값이 필요합니다.')
+            payload = bytes((old & (~mask & 255)) | (value & mask)
+                            for old, value, mask in zip(self.overlay, data_override, data_mask))
         states = self.states
         if p.get('signal_counters'):
             message = self.db_messages.get(p['bus'], {}).get(p['id'])
@@ -174,19 +183,26 @@ class RegisteredCommandDialog(QDialog):
         self.use_values = QCheckBox('CMD 전용 값 사용 (HEX 또는 DBC Signals의 Value 편집)')
         self.use_values.setChecked('data_override' in step or not step.get('packet'))
         layout.addWidget(self.use_values)
+        self.direct_input = QCheckBox('직접 HEX / BIN / X 입력 (신호 선택 없이)')
+        self.direct_input.setChecked('data_mask' in step)
+        layout.addWidget(self.direct_input)
+        self.masked_input = MaskedDataInput(self)
+        layout.addWidget(self.masked_input)
         layout.addWidget(QLabel('송신 성공한 CMD 값은 이후 주기 전송에도 유지됩니다. 체크 해제: 현재 패킷 값 사용. 카운트 → CRC 적용.'))
         self.editor = TxPacketDialog(db_messages if db_messages is not None else getattr(parent, 'db_messages', {}), self)
         self.editor.setWindowFlags(Qt.Widget)
         self.editor.btn_ok.hide()
         self.editor.btn_cancel.hide()
         layout.addWidget(self.editor)
-        self.use_values.toggled.connect(self.editor.setEnabled)
-        self.editor.setEnabled(self.use_values.isChecked())
+        self.use_values.toggled.connect(self.update_value_mode)
+        self.direct_input.toggled.connect(self.update_value_mode)
+        self.update_value_mode()
         self.combo.currentIndexChanged.connect(self.load_packet)
         self.load_packet()
         if 'data_override' in step:
             self.editor.edit_data.setText(' '.join(f'{b:02X}' for b in step['data_override']))
             self.editor.on_data_edited()
+            self.masked_input.set_data(step['data_override'], step.get('data_mask', [255] * len(step['data_override'])), step.get('input_format', 'HEX'))
         layout.addWidget(QLabel('반복 횟수 (간격은 등록 패킷의 딜레이 사용)'))
         self.repeat = QSpinBox()
         self.repeat.setRange(1, 10000)
@@ -197,12 +213,20 @@ class RegisteredCommandDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def update_value_mode(self):
+        active = self.use_values.isChecked()
+        self.direct_input.setEnabled(active)
+        self.masked_input.setVisible(self.direct_input.isChecked())
+        self.masked_input.setEnabled(active)
+        self.editor.setEnabled(active and not self.direct_input.isChecked())
+
     def load_packet(self):
         if self.combo.currentIndex() < 0:
             return
         packet = copy.deepcopy(self.packets[self.combo.currentIndex()])
         packet.setdefault('count', 0)
         self.editor.set_packet_data(packet)
+        self.masked_input.set_data(packet['data'], [255] * packet['length'])
         for widget in (self.editor.combo_bus, self.editor.edit_id, self.editor.combo_symbol,
                        self.editor.combo_type, self.editor.combo_length, self.editor.check_brs,
                        self.editor.crc_combo, self.editor.edit_cycle, self.editor.edit_note):
@@ -216,9 +240,13 @@ class RegisteredCommandDialog(QDialog):
             return
         packet = copy.deepcopy(self.packets[self.combo.currentIndex()])
         override = None
+        mask = None
         if self.use_values.isChecked():
             try:
-                override = list(bytes.fromhex(self.editor.edit_data.text()))
+                if self.direct_input.isChecked():
+                    override, mask = self.masked_input.values(packet['length'])
+                else:
+                    override = list(bytes.fromhex(self.editor.edit_data.text()))
                 validate_command_data(override, packet['length'])
             except ValueError as exc:
                 QMessageBox.warning(self, 'CMD 값', str(exc))
@@ -228,6 +256,9 @@ class RegisteredCommandDialog(QDialog):
                                 summary=f"BUS {packet['bus']} · 0x{packet['id']:X} · {packet['cycle']} ms")
         if override is not None:
             self.result_step['data_override'] = override
+        if mask is not None:
+            self.result_step['data_mask'] = mask
+            self.result_step['input_format'] = self.masked_input.mode
         super().accept()
 
 

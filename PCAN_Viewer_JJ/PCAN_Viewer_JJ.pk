@@ -3,31 +3,31 @@
     "tx_packets": [],
     "db_files": {
         "1": [
-            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/EMB/HL Mando_Rev2_EMB.sym"
+            "D:/Project/2026/M26016-01_HL Mando_ECM Platform/Doc/HL_Mando/ECM/HL Mando_Rev2_ECM.sym"
         ],
         "2": [],
         "3": []
     },
     "can_config": {
         "1": {
-            "channel": "PCAN-USB FD (0x51) [FD]",
+            "channel": "No available PCAN channels found",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "2 MBit/s",
+            "data_bitrate": "N/A",
             "is_open": false
         },
         "2": {
-            "channel": "PCAN-USB FD (0x51) [FD]",
+            "channel": "No available PCAN channels found",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "Off",
+            "data_bitrate": "N/A",
             "is_open": false
         },
         "3": {
-            "channel": "PCAN-USB FD (0x51) [FD]",
+            "channel": "No available PCAN channels found",
             "bitrate": "500 kBit/s",
             "fd_iso": "ISO",
-            "data_bitrate": "Off",
+            "data_bitrate": "N/A",
             "is_open": false
         }
     }

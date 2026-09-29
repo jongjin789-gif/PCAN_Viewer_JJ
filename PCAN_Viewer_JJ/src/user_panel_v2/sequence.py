@@ -8,6 +8,7 @@ from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QTextCursor, QTextCharFormat
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QTextEdit, QAction
 from src.crc_utils import calculate_crc16_ccitt_false
+from .masked_data import masked_match
 
 
 def format_can_id(packet):
@@ -43,6 +44,10 @@ def validate_steps(steps, actions_only=False, allow_empty=False):
             raise ValueError(f"Step {index}: invalid data.")
         if p.get("is_brs") and not p.get("is_fd"):
             raise ValueError("BRS requires FD.")
+        if kind == 'CMD' and 'data_mask' in step:
+            from .packets import validate_command_data
+            validate_command_data(step.get('data_override'), n)
+            validate_command_data(step['data_mask'], n)
         if kind == "RCV":
             mask = step.get("mask", [])
             if len(mask) != n or not any(mask) or any(not 0 <= int(b) <= 255 for b in mask):
@@ -252,7 +257,8 @@ class SequenceControl(QWidget):
             p = self.steps[self.index]["packet"]
             if hasattr(self.owner, 'tx_packets'):
                 runtime = self.owner._packet_runtimes[p['packet_id']]
-                runtime.send(data_override=self.steps[self.index].get('data_override'))
+                runtime.send(data_override=self.steps[self.index].get('data_override'),
+                             data_mask=self.steps[self.index].get('data_mask'))
                 self.write(self.step_log("송신 완료"))
                 self.remaining -= 1
                 self.timer.start(int(p.get('cycle', 0)) if self.remaining else 0)
@@ -301,7 +307,7 @@ class SequenceControl(QWidget):
         if (bus, can_id, extended, fd, brs) != (p["bus"], p["id"], p.get("is_extended_id", p["id"] > 0x7FF), p.get("is_fd", False), p.get("is_brs", False)):
             return
         self.last_receive = bytes(data).hex(" ").upper()
-        if len(data) != p["length"] or not all((a & m) == (b & m) for a, b, m in zip(data, p["data"], s["mask"])):
+        if not masked_match(data, p['data'], s['mask'], s.get('allow_length_mismatch', False)):
             return
         self.pending_match = True
         if idx == self.index and not self.matched:

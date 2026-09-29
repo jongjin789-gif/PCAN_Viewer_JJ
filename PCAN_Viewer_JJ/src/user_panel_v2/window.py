@@ -16,6 +16,9 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QInputDialog,
+    QTabBar,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -102,6 +105,8 @@ class UserPanelWindow(QWidget):
         self.mode = "edit"
 
         self.widgets_config = []
+        self.pages = [dict(id='default', name='페이지 1')]
+        self.active_page_id = 'default'
         self.tx_packets = []
         self.init_steps = []
         self._init_running = False
@@ -112,6 +117,10 @@ class UserPanelWindow(QWidget):
         self.widget_child_hosts = {}
         self.selected_widget_id = None
         self.selected_widget_ids = set()
+        self._tool_clipboard = []
+        self._paste_offset = 0
+        self._ctrl_drag_copy = False
+        self._ctrl_click_selected = False
         self.channel_settings = {}
         self._undo_stack = []
         self._redo_stack = []
@@ -201,7 +210,7 @@ class UserPanelWindow(QWidget):
         root.addWidget(self.init_control)
 
         self.label_key_help = QLabel(
-            "Move: Arrow keys | Resize: Shift+Arrow | Delete: Del | Undo: Ctrl+Z | Redo: Ctrl+Y (50 steps) | EDIT only"
+            "Copy/Paste: Ctrl+C/V | Copy drag: Ctrl+Drag | Move: Arrows | Resize: Shift+Arrows | Delete: Del | Undo/Redo: Ctrl+Z/Y | EDIT only"
         )
         self.label_key_help.setStyleSheet("color:#555;")
         self.label_key_help.setWordWrap(True)
@@ -299,7 +308,22 @@ class UserPanelWindow(QWidget):
         self.canvas_scroll.setWidgetResizable(True)
         self.canvas_scroll.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.canvas_scroll.setWidget(self.canvas)
+        page_row = QHBoxLayout()
+        self.page_tabs = QTabBar()
+        self.page_tabs.setExpanding(False)
+        self.page_tabs.setUsesScrollButtons(True)
+        self.page_tabs.currentChanged.connect(self._switch_page)
+        self.page_tabs.tabBarDoubleClicked.connect(self.rename_page)
+        self.btn_add_page = QPushButton('+ 탭')
+        self.btn_add_page.clicked.connect(self.add_page)
+        self.btn_rename_page = QPushButton('탭 이름 변경')
+        self.btn_rename_page.clicked.connect(lambda: self.rename_page(self.page_tabs.currentIndex()))
+        page_row.addWidget(self.page_tabs, 1)
+        page_row.addWidget(self.btn_add_page)
+        page_row.addWidget(self.btn_rename_page)
+        right_lay.addLayout(page_row)
         right_lay.addWidget(self.canvas_scroll)
+        self._sync_page_tabs()
 
         split.addWidget(left)
         split.addWidget(right)
@@ -422,6 +446,7 @@ class UserPanelWindow(QWidget):
         def _add_shortcut(keyseq, callback):
             sc = QShortcut(QKeySequence(keyseq), self.canvas)
             sc.setContext(Qt.WidgetWithChildrenShortcut)
+            sc.setEnabled(self.mode == 'edit')
             sc.activated.connect(callback)
             self._shortcuts.append(sc)
 
@@ -434,10 +459,140 @@ class UserPanelWindow(QWidget):
         _add_shortcut("Shift+Left", lambda: self.resize_selected_span(-1, 0))
         _add_shortcut("Shift+Right", lambda: self.resize_selected_span(1, 0))
         _add_shortcut(Qt.Key_Delete, self.delete_selected_widget)
+        for host in (self.canvas, self.list_tools):
+            for key, callback in [('Ctrl+C', self.copy_selected_tools), ('Ctrl+V', self.paste_tools)]:
+                shortcut = QShortcut(QKeySequence(key), host)
+                shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+                shortcut.activated.connect(callback)
+                self._shortcuts.append(shortcut)
         delete_from_list = QShortcut(QKeySequence(Qt.Key_Delete), self.list_tools)
         delete_from_list.setContext(Qt.WidgetWithChildrenShortcut)
         delete_from_list.activated.connect(self.delete_selected_widget)
         self._shortcuts.append(delete_from_list)
+
+    def _sync_page_tabs(self):
+        self.page_tabs.blockSignals(True)
+        while self.page_tabs.count():
+            self.page_tabs.removeTab(0)
+        for page in self.pages:
+            self.page_tabs.addTab(page['name'])
+        index = next((i for i, p in enumerate(self.pages) if p['id'] == self.active_page_id), 0)
+        self.active_page_id = self.pages[index]['id']
+        self.page_tabs.setCurrentIndex(index)
+        self.page_tabs.blockSignals(False)
+
+    def _page_for(self, cfg):
+        # Nested tools belong to their root container's page.
+        seen = set()
+        while cfg.get('parent_id') and cfg['parent_id'] not in seen:
+            seen.add(cfg['parent_id'])
+            parent = self._cfg_by_id(cfg['parent_id'])
+            if parent is None:
+                break
+            cfg = parent
+        return cfg.get('page_id', self.pages[0]['id'])
+
+    def _apply_page_visibility(self):
+        for cfg in self.widgets_config:
+            frame = self.widget_frames.get(cfg['id'])
+            if frame is not None:
+                frame.setVisible(self._page_for(cfg) == self.active_page_id)
+
+    def _switch_page(self, index):
+        if not 0 <= index < len(self.pages):
+            return
+        self._cancel_draw_mode(refresh=False)
+        self._hide_drag_preview()
+        self._drag_target_id = None
+        self.active_page_id = self.pages[index]['id']
+        self.selected_widget_id = None
+        self.selected_widget_ids.clear()
+        # Keep controls and packet runtimes alive across tab switches.
+        self._apply_page_visibility()
+        self._refresh_selection_ui()
+        self._refresh_tool_list()
+
+    def add_page(self):
+        if self.mode != 'edit':
+            return
+        name, ok = QInputDialog.getText(self, '탭 추가', '탭 이름:', text=f'페이지 {len(self.pages)+1}')
+        if not ok or not name.strip():
+            return
+        self.pages.append(dict(id=str(uuid.uuid4()), name=name.strip()))
+        self.active_page_id = self.pages[-1]['id']
+        self._sync_page_tabs()
+        self._switch_page(len(self.pages)-1)
+        self._record_history()
+
+    def rename_page(self, index):
+        if self.mode != 'edit' or not 0 <= index < len(self.pages):
+            return
+        name, ok = QInputDialog.getText(self, '탭 이름 변경', '탭 이름:', text=self.pages[index]['name'])
+        if ok and name.strip():
+            self.pages[index]['name'] = name.strip()
+            self._sync_page_tabs()
+            self._record_history()
+
+    def _copy_tool_snapshot(self):
+        ids = {cfg['id'] for cfg in self.selected_configs()}
+        # Include children of copied groups once, even if also selected explicitly.
+        while True:
+            expanded = ids | {cfg['id'] for cfg in self.widgets_config if cfg.get('parent_id') in ids}
+            if expanded == ids:
+                break
+            ids = expanded
+        return copy.deepcopy([cfg for cfg in self.widgets_config if cfg['id'] in ids])
+
+    def copy_selected_tools(self):
+        if self.mode != 'edit':
+            return
+        snapshot = self._copy_tool_snapshot()
+        if snapshot:
+            self._tool_clipboard = snapshot
+            self._paste_offset = 0
+
+    def paste_tools(self):
+        if self.mode != 'edit' or not self._tool_clipboard:
+            return
+        self._paste_offset += 1
+        self._duplicate_tools(self._tool_clipboard, self._paste_offset, self._paste_offset)
+
+    def _duplicate_tools(self, snapshot, row_delta, col_delta):
+        if self.mode != 'edit' or not snapshot:
+            return
+        clones = copy.deepcopy(snapshot)
+        mapping = {cfg['id']: str(uuid.uuid4()) for cfg in clones}
+        roots = [cfg for cfg in clones if cfg.get('parent_id') not in mapping]
+        # One shared offset preserves the selected tools' relative positions.
+        def bounded_delta(key, span, limit, wanted):
+            low = max(-int(cfg.get(key, 0)) for cfg in roots)
+            high = min(limit - int(cfg.get(key, 0)) - int(cfg.get(span, 1)) for cfg in roots)
+            if wanted > 0 and high <= 0 and low < 0:
+                wanted = -wanted
+            return max(low, min(high, wanted))
+        dr = bounded_delta('row', 'row_span', self.grid_rows, row_delta)
+        dc = bounded_delta('col', 'col_span', self.grid_cols, col_delta)
+        z = self._next_z()
+        existing_ids = {cfg['id'] for cfg in self.widgets_config}
+        for index, cfg in enumerate(clones):
+            original_id = cfg['id']
+            parent = cfg.get('parent_id')
+            cfg['id'] = mapping[original_id]
+            cfg['page_id'] = self.active_page_id
+            cfg['title'] = cfg.get('title', 'Widget') + ' (복사)'
+            cfg['z_index'] = z + index
+            if parent in mapping:
+                cfg['parent_id'] = mapping[parent]
+            else:
+                cfg['parent_id'] = parent if parent in existing_ids and self._page_for(self._cfg_by_id(parent)) == self.active_page_id else None
+                cfg['row'] = int(cfg.get('row', 0)) + dr
+                cfg['col'] = int(cfg.get('col', 0)) + dc
+        self.widgets_config.extend(clones)
+        self.selected_widget_ids = {cfg['id'] for cfg in clones}
+        self.selected_widget_id = clones[0]['id']
+        self.rebuild_grid()
+        self.properties.refresh(force=True)
+        self.canvas.setFocus()
 
     def manage_tx_packets(self):
         if self.mode != 'edit':
@@ -646,7 +801,13 @@ class UserPanelWindow(QWidget):
 
         for item in getattr(self, "_edit_mode_actions", []):
             item.setEnabled(is_edit)
+        for shortcut in getattr(self, '_shortcuts', []):
+            shortcut.setEnabled(is_edit)
+        for shortcut in getattr(self, '_shortcuts', []):
+            shortcut.setEnabled(is_edit)
         self.btn_packets.setEnabled(is_edit)
+        self.btn_add_page.setEnabled(is_edit)
+        self.btn_rename_page.setEnabled(is_edit)
         self.btn_init.setEnabled(is_edit)
         self._set_init_tool_state()
 
@@ -669,6 +830,7 @@ class UserPanelWindow(QWidget):
 
     def _history_snapshot(self):
         return dict(widgets=copy.deepcopy(self.widgets_config),
+                    pages=copy.deepcopy(self.pages), active_page_id=self.active_page_id,
                     tx_packets=copy.deepcopy(self.tx_packets),
                     init_steps=copy.deepcopy(self.init_steps),
                     selected=self.selected_widget_id, ids=set(self.selected_widget_ids))
@@ -691,7 +853,7 @@ class UserPanelWindow(QWidget):
         if self._history_suspended:
             return
         current = self._history_snapshot()
-        if self._history_current is not None and current["widgets"] != self._history_current["widgets"]:
+        if self._history_current is not None and any(current[key] != self._history_current.get(key) for key in ('widgets', 'pages')):
             self._undo_stack.append(self._history_current)
             del self._undo_stack[:-self.HISTORY_LIMIT]
             self._redo_stack.clear()
@@ -708,6 +870,9 @@ class UserPanelWindow(QWidget):
             self._cancel_draw_mode(refresh=False)
             self._drag_target_id = None
             self.widgets_config = copy.deepcopy(state["widgets"])
+            self.pages = copy.deepcopy(state['pages'])
+            self.active_page_id = state['active_page_id']
+            self._sync_page_tabs()
             self.tx_packets = copy.deepcopy(state.get('tx_packets', []))
             self.init_steps = copy.deepcopy(state.get('init_steps', []))
             for cfg in self.widgets_config:
@@ -944,6 +1109,8 @@ class UserPanelWindow(QWidget):
         return [c for c in self.widgets_config if c["id"] in ids]
 
     def _normalize_config(self, cfg):
+        existing = self._cfg_by_id(cfg.get('id'))
+        cfg.setdefault('page_id', existing.get('page_id', self.active_page_id) if existing else self.active_page_id)
         cfg.setdefault("id", str(uuid.uuid4()))
         cfg.setdefault("widget_type", "label")
         cfg.setdefault("title", "Widget")
@@ -1008,6 +1175,8 @@ class UserPanelWindow(QWidget):
     def _group_parent_candidates(self, exclude_id=None):
         out = []
         for cfg in self.widgets_config:
+            if self._page_for(cfg) != self.active_page_id:
+                continue
             if cfg.get("id") == exclude_id:
                 continue
             if cfg.get("widget_type") in ("group_box", "tab_container"):
@@ -1028,6 +1197,8 @@ class UserPanelWindow(QWidget):
         self.list_tools.clear()
         sorted_cfg = sorted(self.widgets_config, key=lambda c: int(c.get("z_index", 0)))
         for cfg in sorted_cfg:
+            if self._page_for(cfg) != self.active_page_id:
+                continue
             binding = cfg.get("binding", {})
             parent_id = cfg.get("parent_id")
             parent_text = "ROOT" if not parent_id else f"P:{str(parent_id)[:8]}"
@@ -1071,6 +1242,8 @@ class UserPanelWindow(QWidget):
     def _hit_group_parent_from_global(self, global_pos, exclude_id=None):
         selected_id = exclude_id
         for cfg in sorted(self.widgets_config, key=lambda x: int(x.get("z_index", 0)), reverse=True):
+            if self._page_for(cfg) != self.active_page_id:
+                continue
             wid = cfg.get("id")
             if wid == selected_id:
                 continue
@@ -1315,6 +1488,7 @@ class UserPanelWindow(QWidget):
 
             frame.raise_()
 
+        self._apply_page_visibility()
         self._refresh_selection_ui()
         self._refresh_tool_list()
         self._sync_frame_timers_from_configs()
@@ -1349,17 +1523,15 @@ class UserPanelWindow(QWidget):
                 return
             self.canvas.setFocus()
 
-            if event is not None and event.modifiers() & Qt.ControlModifier:
+            self._ctrl_drag_copy = bool(event is not None and event.modifiers() & Qt.ControlModifier)
+            self._ctrl_click_selected = False
+            if self._ctrl_drag_copy:
                 ids = {c["id"] for c in self.selected_configs()}
-                if widget_id in ids:
-                    ids.remove(widget_id)
-                else:
-                    ids.add(widget_id)
+                self._ctrl_click_selected = widget_id in ids
+                ids.add(widget_id)
                 self.selected_widget_ids = ids
-                self.selected_widget_id = widget_id if widget_id in ids else next(iter(ids), None)
-                self._refresh_selection_ui()
-                return
-            self.selected_widget_ids = {widget_id}
+            else:
+                self.selected_widget_ids = {widget_id}
             self.selected_widget_id = widget_id
             self._refresh_selection_ui()
 
@@ -1382,7 +1554,7 @@ class UserPanelWindow(QWidget):
                     local = event.pos()
                     w = max(1, widget.width())
                     h = max(1, widget.height())
-                    self._drag_resize_mode = (local.x() >= (w - 16) and local.y() >= (h - 16))
+                    self._drag_resize_mode = not self._ctrl_drag_copy and (local.x() >= (w - 16) and local.y() >= (h - 16))
                 except Exception:
                     self._drag_target_id = None
                     self._drag_start_global = None
@@ -1417,7 +1589,7 @@ class UserPanelWindow(QWidget):
                 preview_col_span = max(1, c_end - c_start + 1)
                 self._show_drag_preview(cfg, preview_row_span, preview_col_span, resize_mode=True)
             else:
-                new_parent = self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
+                new_parent = cfg.get('parent_id') if self._ctrl_drag_copy else self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
                 # 위젯의 좌상단이 위치할 목표 지점을 오프셋을 적용하여 계산합니다.
                 adjusted_pos = end_pos
                 if self._drag_offset_global:
@@ -1440,13 +1612,22 @@ class UserPanelWindow(QWidget):
 
                 # 마우스가 거의 움직이지 않았다면(클릭), 드래그로 처리하지 않고 종료합니다.
                 if (end_pos - self._drag_start_global).manhattanLength() < QApplication.startDragDistance():
+                    if self._ctrl_drag_copy and self._ctrl_click_selected:
+                        self.selected_widget_ids.discard(widget_id)
+                        self.selected_widget_id = next(iter(self.selected_widget_ids), None)
+                        self._refresh_selection_ui()
                     return
 
                 cfg = self._get_selected_config()
                 if not cfg:
                     return
 
-                if self._drag_resize_mode:
+                if self._ctrl_drag_copy:
+                    adjusted_pos = end_pos - self._drag_offset_global
+                    row_new, col_new = self._cell_from_global_in_parent(cfg.get('parent_id'), adjusted_pos)
+                    snapshot = self._copy_tool_snapshot()
+                    self._duplicate_tools(snapshot, row_new - int(cfg.get('row', 0)), col_new - int(cfg.get('col', 0)))
+                elif self._drag_resize_mode:
                     parent_id = cfg.get("parent_id")
                     r_end, c_end = self._cell_from_global_in_parent(parent_id, end_pos)
                     r_start = int(cfg.get("row", 0))
@@ -1478,6 +1659,7 @@ class UserPanelWindow(QWidget):
                 self._drag_origin_span = None
                 self._drag_origin_parent = None
                 self._drag_resize_mode = False
+                self._ctrl_drag_copy = False
                 self._hide_drag_preview()
 
         widget.mousePressEvent = _on_press
@@ -1568,6 +1750,10 @@ class UserPanelWindow(QWidget):
             lay.setVerticalSpacing(0)
             slider = QSlider(Qt.Horizontal)
             slider.setObjectName("slider")
+            slider.setFocusPolicy(Qt.StrongFocus)
+            slider.setSingleStep(1)
+            slider.setInvertedControls(False)
+            slider.setLayoutDirection(Qt.LeftToRight)
             steps = self._slider_steps(binding, min_v, max_v)
             slider.setRange(0, steps)
             initial = max(min_v, min(max_v, float(binding.get("tx_initial_value", min_v))))
@@ -1579,6 +1765,15 @@ class UserPanelWindow(QWidget):
             value_label.setAlignment(Qt.AlignCenter)
             lay.addWidget(slider, 0, 1)
             lay.addWidget(value_label, 1, 1)
+            value_input = QLineEdit(self._format_slider_value(binding, initial))
+            value_input.setObjectName("slider_value_input")
+            value_input.setToolTip("값 입력 후 Set 또는 Enter. 숫자가 아니면 Home 값으로 복귀합니다.")
+            set_button = QPushButton("Set")
+            set_button.setObjectName("slider_set")
+            input_row = QHBoxLayout()
+            input_row.addWidget(value_input, 1)
+            input_row.addWidget(set_button)
+            lay.addLayout(input_row, 2, 0, 1, 2)
             home = QPushButton("Home")
             home.setObjectName("slider_home")
             home.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
@@ -1591,6 +1786,7 @@ class UserPanelWindow(QWidget):
                 ratio = 0.0 if steps <= 0 else (v / float(steps))
                 phys = min_v + ((max_v - min_v) * ratio)
                 value_label.setText(self._format_slider_value(binding, phys))
+                value_input.setText(self._format_slider_value(binding, phys))
                 if behavior == "tx":
                     self._emit_tx(cfg, phys)
 
@@ -1601,6 +1797,22 @@ class UserPanelWindow(QWidget):
                 else:
                     slider.setValue(initial_step)
             home.clicked.connect(_home)
+            def _set_value():
+                try:
+                    value = float(value_input.text())
+                    if not math.isfinite(value):
+                        raise ValueError('Non-finite value')
+                except ValueError:
+                    _home()
+                    return
+                value = max(min_v, min(max_v, value))
+                target = int(round((value - min_v) / (max_v - min_v) * steps))
+                if slider.value() == target:
+                    _on_changed(target)
+                else:
+                    slider.setValue(target)
+            set_button.clicked.connect(_set_value)
+            value_input.returnPressed.connect(_set_value)
             return container, None
 
         if wtype == "spinbox":
@@ -1874,6 +2086,8 @@ class UserPanelWindow(QWidget):
         target = targets[idx]
         self._conflict_cursor[self.selected_widget_id] = idx + 1
 
+        target_page = self._page_for(self._cfg_by_id(target))
+        self.page_tabs.setCurrentIndex(next(i for i, p in enumerate(self.pages) if p['id'] == target_page))
         self.selected_widget_id = target
         self._refresh_selection_ui()
 
@@ -2101,6 +2315,12 @@ class UserPanelWindow(QWidget):
                     slider.blockSignals(False)
                     if value_label is not None:
                         value_label.setText(self._format_slider_value(binding, v))
+                    value_input = ctrl.findChild(QLineEdit, "slider_value_input")
+                    if value_input is not None and not value_input.hasFocus():
+                        value_input.setText(self._format_slider_value(binding, v))
+                    value_input = ctrl.findChild(QLineEdit, "slider_value_input")
+                    if value_input is not None and not value_input.hasFocus():
+                        value_input.setText(self._format_slider_value(binding, v))
             return
 
         if wtype == "spinbox":
@@ -2222,7 +2442,9 @@ class UserPanelWindow(QWidget):
 
     def _panel_data(self):
         return {
-            "version": 4,
+            "version": 5,
+            "pages": copy.deepcopy(self.pages),
+            "active_page_id": self.active_page_id,
             "tx_packets": copy.deepcopy(self.tx_packets),
             "init_steps": copy.deepcopy(self.init_steps),
             "grid": {"rows": self.grid_rows, "cols": self.grid_cols, "cell_size": self.grid_cell_size},
@@ -2269,6 +2491,15 @@ class UserPanelWindow(QWidget):
         self.grid_cols = max(1, int(data.get("grid", {}).get("cols", 12)))
         self.grid_cell_size = max(16, int(data.get("grid", {}).get("cell_size", 32)))
         self.widgets_config = list(data.get("widgets", []))
+        self.pages = copy.deepcopy(data.get('pages') or [dict(id='default', name='페이지 1')])
+        page_ids = [p['id'] for p in self.pages]
+        if len(set(page_ids)) != len(page_ids) or any(not isinstance(p.get('name'), str) or not p['name'].strip() for p in self.pages):
+            raise ValueError('Invalid panel pages')
+        self.active_page_id = data.get('active_page_id', page_ids[0])
+        self._sync_page_tabs()
+        for cfg in self.widgets_config:
+            if cfg.get('page_id') not in page_ids:
+                cfg['page_id'] = page_ids[0]
         self.channel_settings = copy.deepcopy(data.get("channel_settings", {}))
         self.selected_widget_ids.clear()
         for cfg in self.widgets_config:
@@ -2278,7 +2509,7 @@ class UserPanelWindow(QWidget):
                 if packet:
                     bind_packet(cfg['binding'], packet)
             reconcile_binding(self.db_messages, cfg["binding"])
-        self.selected_widget_id = self.widgets_config[0].get("id") if self.widgets_config else None
+        self.selected_widget_id = next((c['id'] for c in self.widgets_config if self._page_for(c) == self.active_page_id), None)
 
         shape_count = sum(1 for c in self.widgets_config if str(c.get("widget_type", "")).startswith("shape_"))
         self._shape_counter = max(1, shape_count + 1)

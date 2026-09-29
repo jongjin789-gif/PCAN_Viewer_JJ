@@ -17,6 +17,8 @@ from src.record_window import RecordWindow
 from src.log_viewer import LogViewerWindow
 from src.tx_panel import TxPanel
 from src.user_panel import UserPanelWindow
+from src.session_manager import SessionManager
+from src.main_menu import install_main_menu
 
 class UniversalCANMonitor(QMainWindow):
     def __init__(self, viewer_only=False, user_panel_security=None):
@@ -49,6 +51,8 @@ class UniversalCANMonitor(QMainWindow):
         self.user_panel_window = None
         self.user_tx_cache = {}
         self.user_frame_properties = {} # User Panel 프레임 속성(BRS 등) 캐시
+        self._session_generation = 0
+        self._graph_pending_frames = {}
         
         self.init_ui()
         if not self.viewer_only:
@@ -58,8 +62,16 @@ class UniversalCANMonitor(QMainWindow):
         self.ui_update_timer = QTimer(self)
         self.ui_update_timer.timeout.connect(self.update_ui_data)
         
-        if hasattr(self, 'tx_panel') and not self.viewer_only:
-            self.tx_panel.auto_load_packets()
+        self.session = SessionManager(self)
+        install_main_menu(self)
+        self.session.start()
+
+    def notify_connection_error(self, title, message):
+        session = getattr(self, 'session', None)
+        if session is not None and session.errors is not None:
+            session.errors.append(message)
+        else:
+            QMessageBox.warning(self, title, message)
         
     def get_app_version(self):
         """build_exe.py 파일 또는 실행 파일명에서 APP_VERSION을 추출하여 타이틀에 표시합니다."""
@@ -383,6 +395,7 @@ class UniversalCANMonitor(QMainWindow):
     def open_combined_graph(self):
         """선택된 여러 시그널을 하나의 그래프 창에 띄웁니다"""
         selected_signals = []
+        bindings = {}
 
         # 기존: self.signal_tree_items 딕셔너리 순회 -> 데이터 수신 순서로 범례 생성
         # 변경: 화면에 보이는 Tree 위젯을 직접 순회 -> 화면에 정렬된 순서대로 범례 생성
@@ -398,8 +411,10 @@ class UniversalCANMonitor(QMainWindow):
                         sig_name = item.text(3).strip()
                         bus_num = int(bus_num_str)
                         
-                        full_sig_name = f"B{bus_num}:{sig_name}"
+                        can_id = int(parent.text(2), 16)
+                        full_sig_name, binding = self.session.bind_signal(bus_num, can_id, sig_name)
                         selected_signals.append(full_sig_name)
+                        bindings[full_sig_name] = binding
                     except (ValueError, IndexError):
                         continue # 데이터 파싱 오류 시 해당 시그널은 무시
             iterator += 1
@@ -409,6 +424,15 @@ class UniversalCANMonitor(QMainWindow):
             return
             
         graph = SignalGraphWindow(selected_signals, main_window=self)
+        graph.signal_bindings = bindings
+        graph._bound_signals = self.resolve_graph_bindings(bindings)
+        for i, key in enumerate(selected_signals):
+            msg, signal = graph._bound_signals[key]
+            label = f'B{bindings[key]["bus"]}:{msg.name}.{signal.name}'
+            graph.display_names[key] = label
+            graph.legend_widget.item(i).setText(label)
+            graph.legend_widget.item(i).setToolTip(label)
+            graph.combo_hover_signal.setItemText(i, label)
         
         # 이미 열려있는 그래프 창이 있다면, 가장 최근 창의 크기를 가져와서 똑같이 맞춰줌
         visible_graphs = [g for g in self.active_graphs if g.isVisible()]
@@ -475,6 +499,8 @@ class UniversalCANMonitor(QMainWindow):
         self.record_window.show()
             
     def route_raw_msg_to_record(self, ts, can_id, data, is_ext, is_err, is_fd, is_rx, bus_num, is_brs=False):
+        if not is_err:
+            self._graph_pending_frames[(bus_num, can_id, is_ext)] = (ts, bytes(data))
         panel = getattr(self, "user_panel_window", None)
         if is_rx and not is_err and panel is not None and panel.isVisible():
             panel.on_sequence_receive(ts, bus_num, can_id, data, is_ext, is_fd, is_brs)
@@ -599,8 +625,9 @@ class UniversalCANMonitor(QMainWindow):
             return
 
         try:
-            if self.user_panel_window is not None and self.user_panel_window.isVisible():
+            if self.user_panel_window is not None:
                 self.user_panel_window.refresh_dbc_bindings()
+                self.user_panel_window.show()
                 self.user_panel_window.raise_()
                 self.user_panel_window.activateWindow()
                 return
@@ -622,9 +649,18 @@ class UniversalCANMonitor(QMainWindow):
             if not lw:
                 continue
             for i in range(lw.count()):
-                p = lw.item(i).data(Qt.UserRole + 1)
-                if p:
-                    result[bus_num].append(p)
+                item = lw.item(i)
+                raw = item.data(Qt.UserRole + 2)
+                if raw is not None:
+                    # Legacy UserPanel packages require paths: materialize the captured
+                    # contents, not a possibly changed/deleted source file.
+                    from src.session_storage import atomic_write
+                    import hashlib
+                    ident = hashlib.sha256(bytes(raw)).hexdigest()
+                    p = self.session.directory / 'db_cache' / ident / item.text()
+                    if not p.exists():
+                        atomic_write(p, bytes(raw))
+                    result[bus_num].append(str(p))
         return result
 
     def replace_db_files_by_bus(self, db_paths_by_bus):
@@ -682,7 +718,10 @@ class UniversalCANMonitor(QMainWindow):
                         handle_hex = hex(ch.channel_handle)
                         is_fd = bool(ch.device_features & FEATURE_FD_CAPABLE)
                         for b in buses_to_update:
-                            self.combo_channels[b].addItem(f"{name} ({handle_hex}) {'[FD]' if is_fd else ''}", {'bustype': 'pcan', 'handle': ch.channel_handle, 'is_fd': is_fd})
+                            self.combo_channels[b].addItem(f"{name} ({handle_hex}) {'[FD]' if is_fd else ''}",
+                                {'bustype': 'pcan', 'handle': ch.channel_handle, 'is_fd': is_fd,
+                                 'device_id': ch.device_id, 'device_type': ch.device_type,
+                                 'controller_number': ch.controller_number})
         except Exception:
             pass
             
@@ -772,9 +811,16 @@ class UniversalCANMonitor(QMainWindow):
 
     def open_can(self, bus_num):
         """OS에 따라 CAN 채널 열기 로직을 분기합니다."""
+        session = getattr(self, 'session', None)
+        if session is not None and not session.busy and bus_num in session.pending_can:
+            session.capture_can(bus_num)
+            if bus_num in session.pending_can:
+                self.notify_connection_error('CAN 설정 확인',
+                    f'BUS {bus_num}: 불러온 설정과 장치가 호환되지 않습니다. 장치/통신 설정을 변경한 뒤 연결하세요.')
+                return
         channel_data = self.combo_channels[bus_num].currentData()
         if not isinstance(channel_data, dict):
-             QMessageBox.warning(self, "Warning", f"Please select a valid CAN channel for Bus {bus_num}.")
+             self.notify_connection_error("Warning", f"Please select a valid CAN channel for Bus {bus_num}.")
              return
 
         bustype = channel_data.get('bustype', 'pcan')
@@ -789,7 +835,7 @@ class UniversalCANMonitor(QMainWindow):
         """python-can 기반의 채널 열기 및 모니터링 시작 (PCAN, Virtual 등)"""
         channel_data = self.combo_channels[bus_num].currentData()
         if not isinstance(channel_data, dict) or channel_data.get('handle') is None:
-            QMessageBox.warning(self, "Warning", f"Please select a valid CAN channel for Bus {bus_num}.")
+            self.notify_connection_error("Warning", f"Please select a valid CAN channel for Bus {bus_num}.")
             return
         channel_handle = channel_data.get('handle')
         bustype = channel_data.get('bustype', 'pcan')
@@ -832,9 +878,9 @@ class UniversalCANMonitor(QMainWindow):
             self.buses[bus_num] = can.interface.Bus(**kwargs)
             
             self.rx_threads[bus_num] = CANReceiverThread(self.buses[bus_num], self.db_messages[bus_num])
-            self.rx_threads[bus_num].error_signal.connect(lambda err, b=bus_num: self.handle_rx_error(err, b))
+            self.rx_threads[bus_num].error_signal.connect(lambda err, b=bus_num, generation=self._session_generation: self.handle_rx_error(err, b) if generation == self._session_generation else None)
             self.rx_threads[bus_num].raw_msg_signal.connect(
-                lambda ts, cid, data, ext, err, fd, is_rx, brs, b=bus_num: self.route_raw_msg_to_record(ts, cid, data, ext, err, fd, is_rx, b, brs)
+                lambda ts, cid, data, ext, err, fd, is_rx, brs, b=bus_num, generation=self._session_generation: self.route_raw_msg_to_record(ts, cid, data, ext, err, fd, is_rx, b, brs) if generation == self._session_generation else None
             )
             self.rx_threads[bus_num].start()
             
@@ -856,13 +902,14 @@ class UniversalCANMonitor(QMainWindow):
             self.statusBar().showMessage(f"Bus {bus_num} Opened: {channel_handle} ({bustype})", 5000)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open CAN channel for Bus {bus_num}:\n{str(e)}")
+            self.close_can(bus_num)
+            self.notify_connection_error("Error", f"Failed to open CAN channel for Bus {bus_num}:\n{str(e)}")
 
     def open_linux_socketcan(self, bus_num):
         """선택된 채널 열기 및 모니터링 시작 (Linux SocketCAN 전용)"""
         channel_data = self.combo_channels[bus_num].currentData()
         if not isinstance(channel_data, dict) or channel_data.get('handle') is None:
-            QMessageBox.warning(self, "Warning", f"Please select a valid CAN channel for Bus {bus_num}.")
+            self.notify_connection_error("Warning", f"Please select a valid CAN channel for Bus {bus_num}.")
             return
         channel_handle = channel_data['handle']
         
@@ -890,6 +937,9 @@ class UniversalCANMonitor(QMainWindow):
                 ip_cmd = ['ip', 'link', 'set', channel_handle, 'up', 'type', 'can', 'bitrate', str(bitrate)]
                 if fd_enabled and dbitrate:
                     ip_cmd.extend(['dbitrate', str(dbitrate), 'fd', 'on'])
+                    ip_cmd.extend(['fd-non-iso', 'on' if self.combo_fd_iso[bus_num].currentText() == 'Non-ISO' else 'off'])
+                else:
+                    ip_cmd.extend(['fd', 'off'])
                     
                 res = subprocess.run(ip_cmd, capture_output=True, text=True)
                 if res.returncode != 0:
@@ -901,7 +951,7 @@ class UniversalCANMonitor(QMainWindow):
 
                     if is_root:
                         # root 권한으로 실행했음에도 실패한 경우 (예: 존재하지 않는 인터페이스)
-                        QMessageBox.warning(self, "명령 실행 오류",
+                        self.notify_connection_error("명령 실행 오류",
                                               f"CAN 인터페이스 '{channel_handle}' 설정 중 오류가 발생했습니다.\n"
                                               f"인터페이스 이름이 정확한지 확인해주세요.\n\n"
                                               f"실행된 명령어: {' '.join(ip_cmd)}\n"
@@ -910,7 +960,7 @@ class UniversalCANMonitor(QMainWindow):
                     else:
                         # root 권한이 없어 실패한 경우, sudo로 실행하도록 안내
                         sudo_cmd_str = f"sudo ip link set {channel_handle} down && sudo {' '.join(ip_cmd)}"
-                        QMessageBox.warning(self, "권한 필요",
+                        self.notify_connection_error("권한 필요",
                                               f"CAN 인터페이스 '{channel_handle}' 설정에 실패했습니다.\n"
                                               "이 작업은 일반적으로 root 권한이 필요합니다.\n\n"
                                               "프로그램을 'sudo'로 다시 시작하거나,\n"
@@ -921,7 +971,7 @@ class UniversalCANMonitor(QMainWindow):
                 # vcan은 일반적으로 sudo 없이도 up 가능하지만, 실패 시 안내
                 res = subprocess.run(['ip', 'link', 'set', channel_handle, 'up'], capture_output=True, text=True)
                 if res.returncode != 0:
-                    QMessageBox.warning(self, "권한 오류 가능성",
+                    self.notify_connection_error("권한 오류 가능성",
                                           f"가상 CAN 인터페이스 '{channel_handle}' 활성화에 실패했습니다.\n"
                                           "터미널에서 아래 명령어를 실행한 후 다시 시도해 주세요:\n"
                                           f"<code>sudo ip link set {channel_handle} up</code>")
@@ -936,9 +986,9 @@ class UniversalCANMonitor(QMainWindow):
             self.buses[bus_num] = can.interface.Bus(**kwargs)
             
             self.rx_threads[bus_num] = CANReceiverThread(self.buses[bus_num], self.db_messages[bus_num])
-            self.rx_threads[bus_num].error_signal.connect(lambda err, b=bus_num: self.handle_rx_error(err, b))
+            self.rx_threads[bus_num].error_signal.connect(lambda err, b=bus_num, generation=self._session_generation: self.handle_rx_error(err, b) if generation == self._session_generation else None)
             self.rx_threads[bus_num].raw_msg_signal.connect(
-                lambda ts, cid, data, ext, err, fd, is_rx, brs, b=bus_num: self.route_raw_msg_to_record(ts, cid, data, ext, err, fd, is_rx, b, brs)
+                lambda ts, cid, data, ext, err, fd, is_rx, brs, b=bus_num, generation=self._session_generation: self.route_raw_msg_to_record(ts, cid, data, ext, err, fd, is_rx, b, brs) if generation == self._session_generation else None
             )
             self.rx_threads[bus_num].start()
             
@@ -960,7 +1010,8 @@ class UniversalCANMonitor(QMainWindow):
             self.statusBar().showMessage(f"Bus {bus_num} Opened: {channel_handle} (SocketCAN)", 5000)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open Linux CAN channel for Bus {bus_num}:\n{str(e)}")
+            self.close_can(bus_num)
+            self.notify_connection_error("Error", f"Failed to open Linux CAN channel for Bus {bus_num}:\n{str(e)}")
 
     def close_can(self, bus_num=None):
         """채널 닫기 및 초기화"""
@@ -972,9 +1023,13 @@ class UniversalCANMonitor(QMainWindow):
                 self.rx_threads[b] = None
                 
             if self.buses[b]:
-                self.buses[b].shutdown()
-                self.buses[b] = None
-                self.bus_capabilities[b]['is_fd'] = False
+                try:
+                    self.buses[b].shutdown()
+                except Exception as exc:
+                    self.notify_connection_error('CAN 종료 오류', f'BUS {b}: {exc}')
+                finally:
+                    self.buses[b] = None
+                    self.bus_capabilities[b]['is_fd'] = False
                 
             self.btn_open[b].setEnabled(True)
             self.combo_channels[b].setEnabled(True)
@@ -1020,69 +1075,74 @@ class UniversalCANMonitor(QMainWindow):
             self.load_db_from_path(path, bus_num, auto_save=True)
 
     def load_db_from_path(self, path, bus_num, auto_save=False):
-        if not os.path.exists(path):
-            return
-            
         try:
-            if path.lower().endswith('.sym'):
-                format_version = "6.0"  # 기본값
-                head_lines = []
-                for enc in ['utf-8-sig', 'cp949', 'cp1252', 'latin1']:
-                    try:
-                        with open(path, 'r', encoding=enc) as f:
-                            head_lines = [f.readline() for _ in range(10)]
-                        break
-                    except UnicodeDecodeError:
-                        pass
-                else:
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                        head_lines = [f.readline() for _ in range(10)]
+            with open(path, 'rb') as stream:
+                raw = stream.read()
+            db = self.parse_database_bytes(os.path.basename(path), raw)
+            self.install_database(db, bus_num, os.path.basename(path), raw, path)
+            if auto_save and not self.viewer_only:
+                self.tx_panel.auto_save_packets()
+        except Exception as exc:
+            QMessageBox.critical(self, 'Load Error', f'Failed to parse {path}:\n{exc}')
 
-                for line in head_lines:
-                    if 'FormatVersion=' in line:
-                        if '5.0' in line:
-                            format_version = "5.0"
-                        break
-                        
-                if format_version == "5.0":
-                    db = self._load_sym_v5(path)
-                else:
-                    db = self._load_sym_v6(path)
+    def parse_database_bytes(self, name, raw):
+        import tempfile
+        # Reuse the existing SYM 5/6 compatibility parser, never the original path.
+        with tempfile.TemporaryDirectory(prefix='pjj-db-') as folder:
+            path = os.path.join(folder, 'database' + os.path.splitext(name)[1].lower())
+            with open(path, 'wb') as stream:
+                stream.write(raw)
+            if name.lower().endswith('.sym'):
+                header = raw[:4096].decode('latin1')
+                db = self._load_sym_v5(path) if re.search(r'FormatVersion\s*=\s*5\.0', header) else self._load_sym_v6(path)
             else:
                 db = cantools.database.load_file(path)
-            
-            file_name = os.path.basename(path)
-            item = QListWidgetItem(file_name)
-            item.setData(Qt.UserRole, db)
-            item.setData(Qt.UserRole + 1, path)
-            self.list_db_files[bus_num].addItem(item)
+        return db
 
-            # DB 로드 후, 각 메시지 내의 시그널을 start_bit 기준으로 영구적으로 정렬합니다.
-            # cantools 라이브러리는 메시지 내 시그널 목록(.signals)을 매번 알파벳 순으로 반환할 수 있으므로,
-            # DB를 로드하는 시점에 한 번만 start_bit 기준으로 정렬해두면, 프로그램 전체에서 일관된 순서를 보장할 수 있습니다.
-            for msg in db.messages:
+    def install_database(self, db, bus_num, name, raw, path='', ident=None):
+        import uuid
+        item = QListWidgetItem(name)
+        item.setData(Qt.UserRole, db)
+        item.setData(Qt.UserRole + 1, path)
+        item.setData(Qt.UserRole + 2, bytes(raw))
+        item.setData(Qt.UserRole + 3, ident or uuid.uuid4().hex)
+        self.list_db_files[bus_num].addItem(item)
+        for msg in db.messages:
+            try:
+                msg.signals.sort(key=lambda s: s.start_bit)
+            except AttributeError:
+                pass
+        self.register_db_messages(db, bus_num)
+        self.btn_open_log.setEnabled(any(self.db_messages.values()))
+        if not self.viewer_only:
+            self.tx_panel.refresh_db_symbols(bus_num)
+        self.statusBar().showMessage(f'Loaded Database: {name} (Bus {bus_num})', 5000)
+
+    def resolve_graph_bindings(self, bindings):
+        databases = {b: [] for b in (1, 2, 3)}
+        for b, listing in self.list_db_files.items():
+            for i in range(listing.count()):
+                item = listing.item(i)
+                databases[b].append(({'id': item.data(Qt.UserRole + 3)}, None, item.data(Qt.UserRole)))
+        return {key: self.session.resolve_binding(binding, databases) for key, binding in bindings.items()}
+
+    def update_bound_graphs(self):
+        pending, self._graph_pending_frames = self._graph_pending_frames, {}
+        for graph in self.active_graphs:
+            decoded = {}
+            for key, binding in graph.signal_bindings.items():
+                frame = (binding['bus'], binding['id'], binding['extended'])
+                if frame not in pending:
+                    continue
+                ts, raw = pending[frame]
+                msg, signal = graph._bound_signals[key]
                 try:
-                    # .sort()는 리스트를 내부적으로(in-place) 정렬합니다.
-                    msg.signals.sort(key=lambda s: s.start_bit)
-                except AttributeError:
-                    # .sym 파일 등 start_bit 속성이 없는 경우, cantools의 기본 정렬(알파벳순)을 유지합니다.
-                    pass
-
-            self.register_db_messages(db, bus_num)
-
-            if any(self.db_messages.values()):
-                self.btn_open_log.setEnabled(True)
-                
-            if hasattr(self, 'tx_panel'):
-                if not self.viewer_only:
-                    self.tx_panel.refresh_db_symbols(bus_num)
-                    if auto_save:
-                        self.tx_panel.auto_save_packets()
-                
-            self.statusBar().showMessage(f"Loaded Database: {file_name} (Bus {bus_num})", 5000)
-                
-        except Exception as e:
-            QMessageBox.critical(self, "Load Error", f"Failed to parse {path}:\n{str(e)}")
+                    if id(msg) not in decoded:
+                        decoded[id(msg)] = msg.decode(raw, decode_choices=False)
+                    if signal.name in decoded[id(msg)]:
+                        graph.update_data(key, ts, decoded[id(msg)][signal.name], signal.unit or '')
+                except (ValueError, KeyError, cantools.database.errors.DecodeError):
+                    continue
 
     def _load_sym_v6(self, file_path):
         """FormatVersion=6.0 심볼 파일을 읽어들이는 함수"""
@@ -1223,7 +1283,7 @@ class UniversalCANMonitor(QMainWindow):
         bus_prefix = f"B{bus_num}:"
         is_graph_open = False
         for g in self.active_graphs:
-            if g.isVisible():
+            if g.isVisible() or getattr(g, 'is_in_combined_view', False):
                 if any(sig_name.startswith(bus_prefix) for sig_name in g.signal_names):
                     is_graph_open = True
                     break
@@ -1267,7 +1327,7 @@ class UniversalCANMonitor(QMainWindow):
         """등록된 모든 데이터베이스 파일을 삭제합니다."""
         is_graph_open = False
         for g in self.active_graphs:
-            if g.isVisible():
+            if g.isVisible() or getattr(g, 'is_in_combined_view', False):
                 is_graph_open = True
                 break
                 
@@ -1395,6 +1455,7 @@ class UniversalCANMonitor(QMainWindow):
         # Combined View에 포함되어 숨겨진(is_visible=False) 그래프도 업데이트 대상에 포함시켜야 하므로,
         # is_in_combined_view 플래그를 함께 확인하여 목록에서 제외되지 않도록 합니다.
         self.active_graphs = [g for g in self.active_graphs if g.isVisible() or getattr(g, 'is_in_combined_view', False)]
+        self.update_bound_graphs()
         
         # 닫힌 그래프는 동기화 목록에서도 동일한 기준으로 정리합니다.
         self.synced_graphs_ordered = [g for g in self.synced_graphs_ordered if g.isVisible() or getattr(g, 'is_in_combined_view', False)]
@@ -1467,7 +1528,7 @@ class UniversalCANMonitor(QMainWindow):
                         except RuntimeError:
                             self.user_panel_window = None
                             
-                    item_unit = item.text(6)
+                    item_unit = unit
                     for graph in self.active_graphs:
                         graph_sig_name = f"B{bus_num}:{sig_name}"
                         if graph_sig_name in graph.signal_names:
@@ -1500,6 +1561,9 @@ class UniversalCANMonitor(QMainWindow):
 
     def closeEvent(self, event):
         """프로그램 종료 시 포트 안전 종료"""
+        self.session.autosave()
+        self.session.timer.stop()
+        self.session.stop_all()
         self._is_closing = True
         if not self.viewer_only:
             for i in range(1, 4):

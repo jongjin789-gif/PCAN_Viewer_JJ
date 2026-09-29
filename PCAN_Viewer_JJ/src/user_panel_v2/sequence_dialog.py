@@ -6,6 +6,7 @@ from src.tx_panel import TxPacketDialog
 from .sequence import validate_steps, format_can_id
 from .inline_editor import show_inline_editor
 from .packets import RegisteredCommandDialog
+from .masked_data import MaskedDataInput, format_masked
 
 
 class PacketActionDialog(QDialog):
@@ -114,10 +115,32 @@ class SequencePacketDialog(TxPacketDialog):
             self.on_length_changed()
         self.edit_id.textChanged.connect(self._suggest_extended)
         self._mark_signals()
+        self.direct_input = QCheckBox('직접 HEX / BIN / X 입력 (신호 체크 없이 비교)')
+        self.direct_input.setChecked(step.get('direct_input', False))
+        self.masked_input = MaskedDataInput(self)
+        n = int(self.combo_length.currentText() or 0)
+        current = self.get_packet_data()['data']
+        self.masked_input.set_data(current, (self.saved_mask + [0] * n)[:n], step.get('input_format', 'HEX'))
+        self.allow_length_mismatch = QCheckBox('수신 DLC 차이 허용: 지정한 비교 비트가 모두 수신되면 비교')
+        self.allow_length_mismatch.setChecked(step.get('allow_length_mismatch', False))
+        self.allow_length_mismatch.setToolTip('기본은 DLC 일치 필수입니다. 켜면 비교하지 않는 뒤쪽 바이트는 없어도 되지만, 지정한 비트가 누락되면 실패합니다.')
+        self.layout().insertWidget(2, self.direct_input)
+        self.layout().insertWidget(3, self.masked_input)
+        self.layout().insertWidget(4, self.allow_length_mismatch)
+        self.direct_input.toggled.connect(self.update_direct_mode)
+        self.update_direct_mode()
         if self.receive_mode:
             self.edit_cycle.setEnabled(False)
             self.edit_cycle.setToolTip("RCV uses timeout; cycle is not executed.")
             self.crc_combo.setToolTip("RCV compares saved bits; CRC is not recalculated.")
+
+    def update_direct_mode(self):
+        self.direct_input.setVisible(self.receive_mode)
+        self.masked_input.setVisible(self.receive_mode and self.direct_input.isChecked())
+        self.allow_length_mismatch.setVisible(self.receive_mode)
+        if self.receive_mode:
+            self.table_signals.setEnabled(not self.direct_input.isChecked())
+            self.edit_data.setEnabled(not self.direct_input.isChecked())
 
     def _suggest_extended(self):
         try:
@@ -148,6 +171,9 @@ class SequencePacketDialog(TxPacketDialog):
             self.table_signals.blockSignals(False)
 
     def comparison(self, packet):
+        if hasattr(self, 'direct_input') and self.direct_input.isChecked():
+            data, mask = self.masked_input.values(packet['length'])
+            return mask, bit_text(data, mask)
         mask = (self.saved_mask + [0] * packet['length'])[:packet['length']]
         labels = []
         if self.current_db_msg:
@@ -166,11 +192,15 @@ class SequencePacketDialog(TxPacketDialog):
     def edit_bits(self):
         try:
             packet = self.get_packet_data()
+            if self.receive_mode and self.direct_input.isChecked():
+                packet['data'], _ = self.masked_input.values(packet['length'])
             mask = self.comparison(packet)[0] if self.receive_mode else [255] * packet['length']
             dlg = BitsDialog(packet['data'], mask, self.receive_mode, self)
             if getattr(self, '_inline_editing', False):
                 def apply_bits():
                     self.saved_mask = dlg.mask
+                    if self.receive_mode and self.direct_input.isChecked():
+                        self.masked_input.set_data(dlg.data, dlg.mask, self.masked_input.mode)
                     self.edit_data.setText(' '.join(f'{b:02X}' for b in dlg.data))
                     self.on_data_edited()
                     self._mark_signals()
@@ -178,6 +208,8 @@ class SequencePacketDialog(TxPacketDialog):
                 return
             if dlg.exec_() == dlg.Accepted:
                 self.saved_mask = dlg.mask
+                if self.receive_mode and self.direct_input.isChecked():
+                    self.masked_input.set_data(dlg.data, dlg.mask, self.masked_input.mode)
                 self.edit_data.setText(' '.join(f'{b:02X}' for b in dlg.data))
                 self.on_data_edited()
                 self._mark_signals()
@@ -192,11 +224,16 @@ class SequencePacketDialog(TxPacketDialog):
             if not self.edit_id.text().strip():
                 raise ValueError("Enter a CAN ID (0 is allowed).")
             packet = self.get_packet_data()
+            if self.receive_mode and self.direct_input.isChecked():
+                packet['data'], _ = self.masked_input.values(packet['length'])
             packet['is_extended_id'] = self.extended.isChecked()
             self.result_step = dict(kind='RCV' if self.receive_mode else 'CMD', packet=packet,
                                     timeout_ms=self.timeout.value(), repeat=self.repeat.value())
             if self.receive_mode:
                 mask, labels = self.comparison(packet)
+                self.result_step['allow_length_mismatch'] = self.allow_length_mismatch.isChecked()
+                self.result_step['direct_input'] = self.direct_input.isChecked()
+                self.result_step['input_format'] = self.masked_input.mode
                 self.result_step['mask'] = mask
                 self.result_step['summary'] = labels or bit_text(packet['data'], mask)
             else:
@@ -272,6 +309,8 @@ class SequenceDialog(QDialog):
                 if p:
                     prefix = f"Bus {p['bus']} ID {format_can_id(p)}: "
                     summary = prefix + (bytes(p['data']).hex(' ').upper() if step['kind'] == 'CMD' else summary)
+                    if step['kind'] == 'CMD' and 'data_mask' in step:
+                        summary = prefix + format_masked(step['data_override'], step['data_mask'], step.get('input_format', 'HEX'))
                 viewer = QLineEdit(summary)
                 viewer.setReadOnly(True)
             self.table.setCellWidget(row, 3, viewer)

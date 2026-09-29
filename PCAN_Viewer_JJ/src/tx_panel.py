@@ -1445,6 +1445,11 @@ class TxPanel(QWidget):
         return os.path.join(base_dir, "PCAN_Viewer_JJ.pk")
 
     def auto_save_packets(self):
+        session = getattr(self.main_window, 'session', None)
+        if session is not None:
+            # SessionManager owns persistent state, including DB contents and windows.
+            session.autosave()
+            return
         if getattr(self, '_is_loading', False):
             return
             

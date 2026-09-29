@@ -112,7 +112,8 @@ class FormulaDialog(QDialog):
                 try:
                     # Basic validation: check if it can be compiled
                     # The actual evaluation with variables happens in the graph window
-                    compiled = compile(expr, '<string>', 'eval')
+                    from src.session_storage import compile_formula
+                    compiled = compile_formula(expr, len(self.legend_items))
                 except Exception as e:
                     QMessageBox.warning(self, "Invalid Formula", f"Error in formula for {y_name}:\n{expr}\n\n{str(e)}")
                     # To prevent crash, return original formulas

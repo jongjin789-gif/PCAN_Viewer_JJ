@@ -121,6 +121,19 @@ class LogParserThread(QThread):
     def cancel(self):
         self._is_cancelled = True
 
+    @staticmethod
+    def _parse_payload(length, tokens, msg_type):
+        # Explorer writes encoded FD DLCs; View and our recorder write byte
+        # counts, even with the same COLUMNS header. Disambiguate using the
+        # complete payload so byte-count logs remain compatible.
+        fd_lengths = {9: 12, 10: 16, 11: 20, 12: 24, 13: 32, 14: 48, 15: 64}
+        if msg_type in ('FD', 'FB', 'FE', 'FBE'):
+            expanded = fd_lengths.get(length)
+            if expanded is not None and len(tokens) == expanded:
+                length = expanded
+        data = bytes.fromhex(''.join(tokens[:length]))
+        return length, data
+
     def run(self):
         signal_data = {} # {(bus_num, can_id): {signal_name: (times[], values[])}}
         found_msgs = set()
@@ -202,12 +215,12 @@ class LogParserThread(QThread):
                                 bus_num = int(tokens[3])
                                 can_id = int(tokens[4].rstrip('h'), 16)
                                 dlc = int(tokens[7])
-                                data = bytes.fromhex("".join(tokens[8:8+dlc]))
+                                dlc, data = self._parse_payload(dlc, tokens[8:], msg_type)
                             elif tokens[4] in ('Rx', 'Tx'): # Format without bus number
                                 bus_num = 1
                                 can_id = int(tokens[3].rstrip('h'), 16)
                                 dlc = int(tokens[5])
-                                data = bytes.fromhex("".join(tokens[6:6+dlc]))
+                                dlc, data = self._parse_payload(dlc, tokens[6:], msg_type)
                             else:
                                 continue
 

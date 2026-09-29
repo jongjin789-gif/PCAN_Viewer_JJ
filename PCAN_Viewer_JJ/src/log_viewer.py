@@ -224,6 +224,8 @@ class LogViewerWindow(QMainWindow):
         self.progress.show()
 
     def on_parse_finished(self, signal_data, found_msgs, raw_logs):
+        if self._is_closing:
+            return
         self.progress.close()
         self.signal_data = signal_data
         self.raw_log_data = raw_logs
@@ -231,6 +233,8 @@ class LogViewerWindow(QMainWindow):
         self.populate_log_table()
 
     def on_parse_error(self, err_msg):
+        if self._is_closing:
+            return
         self.progress.close()
         QMessageBox.critical(self, "Parse Error", f"Failed to parse log file:\n{err_msg}")
 
@@ -774,6 +778,8 @@ class LogViewerWindow(QMainWindow):
     def closeEvent(self, event):
         self._is_closing = True
         self.stop_sending()
+        if hasattr(self, 'progress'):
+            self.progress.close()
         if self._populate_progress:
             self._populate_progress.close()
             self._populate_progress = None
