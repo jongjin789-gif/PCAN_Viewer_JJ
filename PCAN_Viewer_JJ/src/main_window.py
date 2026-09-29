@@ -7,7 +7,7 @@ from src.db_frame_format import load_sym_with_fd
 from src.PCANBasic import *
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGroupBox, QHBoxLayout, QLabel, 
                              QComboBox, QPushButton, QListWidget, QListWidgetItem, QShortcut, QLineEdit,
-                             QTreeWidget, QSplitter, QMessageBox, QFileDialog, QTreeWidgetItemIterator)
+                             QTreeWidget, QSplitter, QMessageBox, QFileDialog, QTreeWidgetItemIterator, QInputDialog)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QIcon, QKeySequence
 from src.utils import get_resource_path, SortableTreeWidgetItem
@@ -21,9 +21,12 @@ from src.session_manager import SessionManager
 from src.main_menu import install_main_menu
 
 class UniversalCANMonitor(QMainWindow):
-    def __init__(self, viewer_only=False, user_panel_security=None):
+    def __init__(self, viewer_only=False, user_panel_security=None, user_panel_only=False, communication_password='1234'):
         super().__init__()
-        self.viewer_only = viewer_only
+        self.user_panel_only = bool(user_panel_only)
+        self.viewer_only = bool(viewer_only and not user_panel_only)
+        self.communication_password = communication_password
+        self._pending_panel_events = []
         self.user_panel_security = user_panel_security or {"enabled": False, "password": ""}
         
         app_version = self.get_app_version()
@@ -55,6 +58,7 @@ class UniversalCANMonitor(QMainWindow):
         self._graph_pending_frames = {}
         
         self.init_ui()
+        self.statusBar().messageChanged.connect(lambda message: self.panel_system_event(message) if message else None)
         if not self.viewer_only:
             self.search_can_channels()
         
@@ -66,12 +70,21 @@ class UniversalCANMonitor(QMainWindow):
         install_main_menu(self)
         self.session.start()
 
+    def panel_system_event(self, message, level='INFO'):
+        panel = self.user_panel_window
+        if panel is not None:
+            panel.log_system(message, level)
+        else:
+            self._pending_panel_events.append((message, level))
+            self._pending_panel_events = self._pending_panel_events[-200:]
+
     def notify_connection_error(self, title, message):
+        self.panel_system_event(message, 'ERROR')
         session = getattr(self, 'session', None)
         if session is not None and session.errors is not None:
             session.errors.append(message)
         else:
-            QMessageBox.warning(self, title, message)
+            QMessageBox.warning(self.user_panel_window or self, title, message)
         
     def get_app_version(self):
         """build_exe.py 파일 또는 실행 파일명에서 APP_VERSION을 추출하여 타이틀에 표시합니다."""
@@ -619,6 +632,17 @@ class UniversalCANMonitor(QMainWindow):
         bus_obj.send(msg)
         self.record_tx_activity(int(bus_num), int(can_id), payload, is_fd)
 
+    def rename_user_panel(self):
+        if self.viewer_only:
+            return
+        self.open_user_panel()
+        panel = self.user_panel_window
+        title, accepted = QInputDialog.getText(self, '유저 패널 제목 변경', '창 제목:', text=panel.windowTitle())
+        if accepted:
+            panel.setWindowTitle(title.strip() or 'User Panel')
+            panel.log_system(f'창 제목 변경: {panel.windowTitle()}')
+            self.session.autosave()
+
     def open_user_panel(self):
         if self.viewer_only:
             QMessageBox.information(self, "Info", "User panel is disabled in viewer-only mode.")
@@ -627,6 +651,8 @@ class UniversalCANMonitor(QMainWindow):
         try:
             if self.user_panel_window is not None:
                 self.user_panel_window.refresh_dbc_bindings()
+                if not self.user_panel_window.isVisible():
+                    self.user_panel_window.set_mode('standby')
                 self.user_panel_window.show()
                 self.user_panel_window.raise_()
                 self.user_panel_window.activateWindow()
@@ -640,6 +666,10 @@ class UniversalCANMonitor(QMainWindow):
             None,
             security_config=self.user_panel_security,
         )
+        self.user_panel_window.set_mode('standby')
+        for message, level in self._pending_panel_events:
+            self.user_panel_window.log_system(message, level)
+        self._pending_panel_events.clear()
         self.user_panel_window.show()
 
     def get_db_file_paths_by_bus(self):
@@ -1056,13 +1086,14 @@ class UniversalCANMonitor(QMainWindow):
             self.tx_panel.auto_save_packets()
 
     def handle_rx_error(self, err_msg, bus_num):
+        self.panel_system_event(f'BUS {bus_num}: {err_msg}', 'ERROR')
         err_lower = (err_msg or "").lower()
         if "receive queue was read too late" in err_lower or err_lower.startswith("rx warning"):
             self.statusBar().showMessage(f"Bus {bus_num}: {err_msg}", 5000)
             return
 
         self.close_can(bus_num)
-        QMessageBox.critical(self, f"CAN Rx Error (Bus {bus_num})", err_msg)
+        QMessageBox.critical(self.user_panel_window or self, f"CAN Rx Error (Bus {bus_num})", err_msg)
    
     def load_database_file(self, bus_num):
         """DBC 또는 SYM 파일 로드 후 파싱하여 트리 구조 생성"""
@@ -1083,7 +1114,8 @@ class UniversalCANMonitor(QMainWindow):
             if auto_save and not self.viewer_only:
                 self.tx_panel.auto_save_packets()
         except Exception as exc:
-            QMessageBox.critical(self, 'Load Error', f'Failed to parse {path}:\n{exc}')
+            self.panel_system_event(f'BUS {bus_num} DBC 불러오기 실패: {path}: {exc}', 'ERROR')
+            QMessageBox.critical(self.user_panel_window or self, 'Load Error', f'Failed to parse {path}:\n{exc}')
 
     def parse_database_bytes(self, name, raw):
         import tempfile
@@ -1294,6 +1326,7 @@ class UniversalCANMonitor(QMainWindow):
             
         row = self.list_db_files[bus_num].row(item)
         self.list_db_files[bus_num].takeItem(row)
+        self.panel_system_event(f'BUS {bus_num} DBC 등록 해제: {item.text()}')
         
         self.db_messages[bus_num].clear()
         self.reset_tree_values(bus_num)
@@ -1454,7 +1487,7 @@ class UniversalCANMonitor(QMainWindow):
         # 닫힌 그래프 창 메모리 정리.
         # Combined View에 포함되어 숨겨진(is_visible=False) 그래프도 업데이트 대상에 포함시켜야 하므로,
         # is_in_combined_view 플래그를 함께 확인하여 목록에서 제외되지 않도록 합니다.
-        self.active_graphs = [g for g in self.active_graphs if g.isVisible() or getattr(g, 'is_in_combined_view', False)]
+        self.active_graphs = [g for g in self.active_graphs if g.isVisible() or getattr(g, 'is_in_combined_view', False) or getattr(g, '_panel_only_hidden', False)]
         self.update_bound_graphs()
         
         # 닫힌 그래프는 동기화 목록에서도 동일한 기준으로 정리합니다.

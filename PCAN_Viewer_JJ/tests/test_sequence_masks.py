@@ -54,7 +54,7 @@ class MaskedSequenceTest(unittest.TestCase):
     def test_send_preserves_current_bits_and_retains_values(self):
         p = packet()
         sent = []
-        main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)}, bus_capabilities={1: {'is_fd': True}})
+        main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)}, bus_capabilities={1: {'is_fd': False}})
         runtime = PacketRuntime(p, {}, main)
         runtime.overlay[1] = 0xAB
         data, mask = parse_masked('21 CX', 8)
@@ -120,7 +120,7 @@ class MaskedSequenceTest(unittest.TestCase):
         cmd = dict(kind='CMD', packet=p, data_override=data, data_mask=mask)
         sent = []
         main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)},
-                               bus_capabilities={1: {'is_fd': True}}, record_tx_activity=lambda *a: None)
+                               bus_capabilities={1: {'is_fd': False}}, record_tx_activity=lambda *a: None)
         panel = UserPanelWindow(main, {})
         self.addCleanup(panel.close)
         panel._load_panel_data(json.loads(json.dumps(dict(tx_packets=[p], widgets=[], init_steps=[cmd]))))

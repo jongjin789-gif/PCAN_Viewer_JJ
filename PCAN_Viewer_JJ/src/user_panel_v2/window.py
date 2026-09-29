@@ -3,8 +3,8 @@ import json
 import math
 import time
 import uuid
-from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QPoint
-from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen
+from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QPoint, QSize
+from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QIcon
 from PyQt5.QtWidgets import (
     QAction,
     QAbstractItemView,
@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QMenuBar,
     QPushButton,
+    QToolButton,
     QDoubleSpinBox,
     QProgressBar,
     QSizePolicy,
@@ -34,6 +35,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QRubberBand,
     QSplitter,
+    QStatusBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -41,12 +43,15 @@ from PyQt5.QtWidgets import (
 
 from .config_dialog import WidgetConfigDialog
 from .sequence import SequenceControl, validate_steps
-from .mode_security import verify_edit_password
+from .mode_security import verify_edit_password, verify_communication_password
+from .system_log import SystemLog
+from src.utils import get_resource_path
 from .storage import PACKAGE_EXT, load_bundle, load_panel_json, save_bundle, save_panel_json
 from .styles import TOOL_STYLE, lamp_style
 from .properties import ToolProperties
 from .binding import reconcile_binding, unpack_raw, matching_signal, bit_positions
-from .packets import PacketRegistryDialog, PacketRuntime, find_packet, bind_packet, validate_tool, validate_packet
+from .commands import command_bindings
+from .packets import PacketRegistryDialog, PacketRuntime, find_packet, bind_packet, validate_tool, validate_packet, connected_packet_bus
 
 
 class GridCanvas(QWidget):
@@ -97,6 +102,7 @@ class UserPanelWindow(QWidget):
         self.security_config = security_config or {}
 
         self.setWindowTitle("User Panel")
+        self.setWindowIcon(QIcon(get_resource_path('icon/user_panel.svg')))
         self.resize(1180, 760)
 
         self.grid_rows = 36
@@ -110,6 +116,8 @@ class UserPanelWindow(QWidget):
         self.tx_packets = []
         self.init_steps = []
         self._init_running = False
+        self._force_running = False
+        self._bus_snapshot = None
         self._paused_packets = set()
         self._packet_runtimes = {}
         self.widget_frames = {}
@@ -155,66 +163,103 @@ class UserPanelWindow(QWidget):
         self._build_ui()
         self.refresh_mode_ui()
         self._reset_history()
+        self._bus_monitor = QTimer(self)
+        self._bus_monitor.setInterval(400)
+        self._bus_monitor.timeout.connect(self._refresh_bus_status)
+        self._bus_monitor.start()
+        self._refresh_bus_status()
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        content = QWidget(self)
+        outer.addWidget(content, 1)
+        root = QVBoxLayout(content)
         self.setFocusPolicy(Qt.StrongFocus)
 
         self.menu_bar = QMenuBar(self)
         root.addWidget(self.menu_bar)
 
-        self.btn_mode_edit = QPushButton("Mode: EDIT")
-        self.btn_mode_standby = QPushButton("Mode: STANDARD")
-        self.btn_mode_run = QPushButton("Mode: RUN")
+        def tool_button(text, icon):
+            button = QToolButton(self)
+            button.setText(text)
+            button.setToolTip(text)
+            button.setAccessibleName(text)
+            button.setIcon(QIcon(get_resource_path(f'icon/panel/{icon}.svg')))
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setIconSize(QSize(26, 26))
+            button.setFixedSize(38, 38)
+            button.setAutoRaise(True)
+            button.setStyleSheet('QToolButton { border-radius: 6px; } '
+                                'QToolButton:hover { background: #e3f5f7; } '
+                                'QToolButton:checked { background: #bfe9ee; border: 1px solid #2194a4; }')
+            return button
+
+        self.btn_mode_edit = tool_button("Mode: EDIT", 'edit')
+        self.btn_mode_standby = tool_button("Mode: STANDARD", 'standard')
+        self.btn_mode_run = tool_button("Mode: RUN", 'run')
         self.btn_mode_edit.clicked.connect(lambda: self.set_mode("edit"))
         self.btn_mode_standby.clicked.connect(lambda: self.set_mode("standby"))
         self.btn_mode_run.clicked.connect(lambda: self.set_mode("run"))
 
-        self.btn_add_tx = QPushButton("Add TX Tool")
-        self.btn_packets = QPushButton("TX 패킷 등록 / 관리")
+        self.btn_add_tx = tool_button("Add TX Tool", 'add_tx')
+        self.btn_packets = tool_button("TX 패킷 등록 / 관리", 'packets')
         self.btn_packets.clicked.connect(self.manage_tx_packets)
-        self.btn_init = QPushButton('RUN Init 시퀀스 설정')
+        self.btn_init = tool_button('RUN Init 시퀀스 설정', 'init')
         self.btn_init.clicked.connect(self.edit_init_sequence)
-        self.btn_add_rx = QPushButton("Add RX Tool")
-        self.btn_add_misc = QPushButton("Add Group/Shape")
+        self.btn_add_rx = tool_button("Add RX Tool", 'add_rx')
+        self.btn_add_misc = tool_button("Add Group/Shape", 'add_shape')
 
         self.btn_add_tx.clicked.connect(lambda: self.add_widget("tx"))
         self.btn_add_rx.clicked.connect(lambda: self.add_widget("rx"))
         self.btn_add_misc.clicked.connect(lambda: self.add_widget("none"))
 
         controls = QHBoxLayout()
+        controls.setSpacing(4)
+        def add_separator():
+            separator = QFrame(self)
+            separator.setFrameShape(QFrame.VLine)
+            separator.setFrameShadow(QFrame.Plain)
+            separator.setFixedSize(1, 24)
+            separator.setStyleSheet('background: #b8c8ce; border: none;')
+            controls.addSpacing(6)
+            controls.addWidget(separator, 0, Qt.AlignVCenter)
+            controls.addSpacing(6)
         controls.addWidget(self.btn_mode_edit)
         controls.addWidget(self.btn_mode_standby)
         controls.addWidget(self.btn_mode_run)
-        controls.addStretch()
-        root.addLayout(controls)
-        controls = QHBoxLayout()
+        self.btn_force_run = tool_button('Force RUN', 'force')
+        self.btn_force_run.clicked.connect(self.force_run)
+        controls.addWidget(self.btn_force_run)
+        add_separator()
+        self.btn_communication = tool_button('통신 설정 / DBC', 'connection')
+        self.btn_communication.clicked.connect(self.open_communication)
+        controls.addWidget(self.btn_communication)
         controls.addWidget(self.btn_packets)
         controls.addWidget(self.btn_init)
+        add_separator()
         controls.addWidget(self.btn_add_tx)
         controls.addWidget(self.btn_add_rx)
         controls.addWidget(self.btn_add_misc)
         controls.addStretch()
         root.addLayout(controls)
+        for button in (self.btn_mode_edit, self.btn_mode_standby, self.btn_mode_run, self.btn_force_run):
+            button.setCheckable(True)
+            button.clicked.connect(self._sync_toolbar_modes)
 
         self._setup_menu_actions()
 
         self.label_mode = QLabel()
-        self.label_mode.setWordWrap(True)
-        root.addWidget(self.label_mode)
+        self.label_mode.setAlignment(Qt.AlignCenter)
+        self.label_io = QLabel()
+        self.label_bus_states = {bus: QLabel() for bus in (1, 2, 3)}
         self.init_control = SequenceControl(self, dict(title='RUN Init', is_init=True, binding={}))
         self.init_control.setMaximumHeight(150)
         self.init_control.button.setEnabled(False)
         self.init_control.finished.connect(self._init_finished)
         self.init_control.hide()
         root.addWidget(self.init_control)
-
-        self.label_key_help = QLabel(
-            "Copy/Paste: Ctrl+C/V | Copy drag: Ctrl+Drag | Move: Arrows | Resize: Shift+Arrows | Delete: Del | Undo/Redo: Ctrl+Z/Y | EDIT only"
-        )
-        self.label_key_help.setStyleSheet("color:#555;")
-        self.label_key_help.setWordWrap(True)
-        root.addWidget(self.label_key_help)
 
         split = QSplitter(Qt.Horizontal)
 
@@ -332,9 +377,97 @@ class UserPanelWindow(QWidget):
         split.setStretchFactor(1, 1)
         split.setSizes([210, 630, 340])
 
-        root.addWidget(split, 1)
+        vertical = QSplitter(Qt.Vertical)
+        vertical.addWidget(split)
+        self.system_log = SystemLog(self)
+        vertical.addWidget(self.system_log)
+        vertical.setStretchFactor(0, 1)
+        vertical.setSizes([540, 140])
+        root.addWidget(vertical, 1)
+        self.status_bar = QStatusBar(self)
+        self.status_bar.setSizeGripEnabled(True)
+        self.status_bar.setMinimumHeight(26)
+        self.status_bar.setStyleSheet(
+            'QStatusBar { background: #f2f4f6; border-top: 1px solid #b8c8ce; } '
+            'QStatusBar::item { border: none; } '
+            'QStatusBar QLabel { padding: 2px 10px; border-right: 1px solid #c6cfd5; }')
+        for bus, label in self.label_bus_states.items():
+            label.setMinimumWidth(label.fontMetrics().horizontalAdvance(f'BUS {bus}: 연결 Classic') + 24)
+            self.status_bar.addWidget(label)
+        self.status_bar.addWidget(QWidget(), 1)
+        self.status_bar.addPermanentWidget(self.label_mode)
+        self.status_bar.addPermanentWidget(self.label_io)
+        outer.addWidget(self.status_bar)
 
         self._sync_geom_editor_from_selection()
+
+    def _sync_toolbar_modes(self):
+        for button, active in ((self.btn_mode_edit, self.mode == 'edit'),
+                               (self.btn_mode_standby, self.mode == 'standby'),
+                               (self.btn_mode_run, self.mode == 'run' and not self._force_running),
+                               (self.btn_force_run, self.mode == 'run' and self._force_running)):
+            button.setChecked(active)
+
+    def log_system(self, message, level='INFO'):
+        if hasattr(self, 'system_log'):
+            self.system_log.append(message, level)
+
+    def _update_mode_status(self):
+        if self.mode == 'edit':
+            mode, activity = 'EDIT', '송신 정지 / 수신 표시 정지'
+        elif self.mode != 'run':
+            mode, activity = 'STANDARD', '송신 정지 / 수신'
+        elif self._init_running:
+            mode, activity = 'RUN · INIT', 'INIT 실행 / 일반 송신 대기'
+        elif self._force_running:
+            mode, activity = 'Force RUN', '송수신'
+        else:
+            mode, activity = 'RUN', '송수신'
+        self.label_mode.setText(mode)
+        self.label_io.setText(activity)
+
+    def _refresh_bus_status(self):
+        main = self.main_window
+        snapshot = tuple((bus, getattr(main, 'buses', {}).get(bus) is not None,
+                          bool(getattr(main, 'bus_capabilities', {}).get(bus, {}).get('is_fd')))
+                         for bus in (1, 2, 3))
+        for bus, opened, fd in snapshot:
+            self.label_bus_states[bus].setText(f"BUS {bus}: {'연결 ' + ('FD' if fd else 'Classic') if opened else '미연결'}")
+        if snapshot != self._bus_snapshot:
+            self.log_system(' | '.join(label.text() for label in self.label_bus_states.values()))
+            self._bus_snapshot = snapshot
+
+    def _authorize_communication(self):
+        password = str(getattr(self.main_window, 'communication_password', '1234'))
+        accepted = verify_communication_password(self, password)
+        self.log_system('통신 권한 인증 성공' if accepted else '통신 권한 인증 취소/실패',
+                        'INFO' if accepted else 'WARN')
+        return accepted
+
+    def open_communication(self):
+        if not self._authorize_communication():
+            return
+        from .connection_dialog import ConnectionDialog
+        dialog = ConnectionDialog(self)
+        dialog.exec_()
+        dialog.deleteLater()
+
+    def force_run(self):
+        if self._authorize_communication():
+            self.set_mode('run', force=True)
+
+    def _check_init_connections(self):
+        for index, step in enumerate(self.init_steps, 1):
+            packets = []
+            if step['kind'] in ('CMD', 'RCV'):
+                packets = [step['packet']]
+            elif step['kind'] == 'START':
+                packets = [p for p in self.tx_packets if step['target_packet_id'] in ('*', p['packet_id'])]
+            for packet in packets:
+                try:
+                    connected_packet_bus(self.main_window, packet)
+                except ValueError as exc:
+                    raise ValueError(f'INIT {index}단계 {step["kind"]}: {exc}') from exc
 
     def _setup_menu_actions(self):
         menu_file = self.menu_bar.addMenu("File")
@@ -621,7 +754,7 @@ class UserPanelWindow(QWidget):
             return
         from .sequence_dialog import SequenceDialog
         dialog = SequenceDialog(self.db_messages, self.init_steps, self, self.tx_packets,
-                                actions_only=True, allow_empty=True, allow_failure=False)
+                                actions_only=False, allow_empty=True, allow_failure=False)
         dialog.setWindowTitle('RUN Init 시퀀스 (비우면 사용 안함)')
         if dialog.exec_() == dialog.Accepted:
             self.init_steps = copy.deepcopy(dialog.steps)
@@ -634,11 +767,12 @@ class UserPanelWindow(QWidget):
             return
         self._init_running = False
         if not success:
+            self.log_system('INIT 실패/중단 — STANDARD 복귀, 일반 송신 시작 안 함', 'ERROR')
             self.mode = 'standby'
             self.refresh_mode_ui()
-            self.label_mode.setText('Init NG / 중단: STANDARD로 전환했습니다. 로그를 확인하세요.')
+            self.label_mode.setToolTip('Init NG / 중단: STANDARD로 전환했습니다. 로그를 확인하세요.')
             return
-        self.label_mode.setText('RUN: Init OK · 정지 지정되지 않은 등록 패킷 주기 전송')
+        self._update_mode_status()
         self._set_init_tool_state()
         self._sync_frame_timers_from_configs()
 
@@ -669,13 +803,15 @@ class UserPanelWindow(QWidget):
         self._sync_frame_timers_from_configs()
 
     def _report_packet_error(self, exc):
-        self.label_mode.setText(f'TX 패킷 오류: {exc}')
+        self.log_system(f'TX 패킷 오류: {exc}', 'ERROR')
+        self.label_mode.setToolTip(f'TX 패킷 오류: {exc}')
         if hasattr(self.main_window, 'statusBar'):
             self.main_window.statusBar().showMessage(f'User panel TX: {exc}', 6000)
 
-    def _prepare_registered_packets(self):
-        validate_steps(self.init_steps, actions_only=True, allow_empty=True)
-        validate_tool(self.tx_packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=self.init_steps)))
+    def _prepare_registered_packets(self, force=False):
+        init = [s for s in self.init_steps if s.get('kind') in ('START', 'STOP')] if force else self.init_steps
+        validate_steps(init, allow_empty=True)
+        validate_tool(self.tx_packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=init)))
         for cfg in self.widgets_config:
             validate_tool(self.tx_packets, cfg)
         runtimes = {}
@@ -702,8 +838,6 @@ class UserPanelWindow(QWidget):
             if cfg.get('behavior') != 'tx' or cfg.get('widget_type') == 'sequence':
                 continue
             binding = cfg['binding']
-            if binding['packet_id'] in retained:
-                continue
             ctrl = self.widget_controls.get(cfg['id'])
             kind = cfg.get('widget_type')
             if kind == 'slider':
@@ -718,13 +852,21 @@ class UserPanelWindow(QWidget):
                 value = binding.get('tx_release_value', binding.get('min', 0))
             else:
                 continue
-            runtimes[binding['packet_id']].stage(binding, value)
+            for target in command_bindings(cfg, enabled_only=True):
+                if target['packet_id'] in retained:
+                    continue
+                target_value = value
+                if kind == 'toggle':
+                    target_value = target.get('tx_on_value', 1) if ctrl and ctrl.isChecked() else target.get('tx_off_value', 0)
+                elif kind == 'button':
+                    target_value = target.get('tx_release_value', target.get('min', 0))
+                runtimes[target['packet_id']].stage(target, target_value)
         self._packet_runtimes = runtimes
 
-    def set_mode(self, new_mode):
+    def set_mode(self, new_mode, force=False):
         if new_mode == 'standard':
             new_mode = 'standby'
-        if new_mode == self.mode:
+        if new_mode == self.mode and not force and not (new_mode == 'run' and self._force_running):
             return
 
         if new_mode == "edit" and self.mode != "edit":
@@ -737,23 +879,43 @@ class UserPanelWindow(QWidget):
         self.stop_panel_commands("모드 변경")
         if new_mode == 'run':
             try:
-                self._prepare_registered_packets()
+                self._prepare_registered_packets(force=force)
+                if not force:
+                    self._check_init_connections()
             except ValueError as exc:
-                QMessageBox.warning(self, 'TX 패킷', str(exc))
+                self.mode = 'standby'
+                self.refresh_mode_ui()
+                self.label_mode.setToolTip(f'RUN 시작 불가 / STANDARD: {exc}')
+                self.log_system(f'RUN 시작 불가 / STANDARD: {exc}', 'ERROR')
                 return
         self.mode = new_mode
+        self._force_running = bool(force and new_mode == 'run')
+        self.log_system('Force RUN — INIT CMD/RCV/DEL 생략, START/STOP만 적용' if self._force_running
+                        else f"모드: {new_mode.upper() if new_mode != 'standby' else 'STANDARD'}")
         if new_mode == 'run':
             self._paused_packets.clear()
-            self._init_running = bool(self.init_steps)
-            self.init_control.setVisible(bool(self.init_steps))
+            self._init_running = bool(self.init_steps) and not force
+            self.init_control.setVisible(bool(self.init_steps) and not force)
+            if force:
+                for index, step in enumerate(self.init_steps, 1):
+                    if step.get('kind') in ('START', 'STOP'):
+                        targets = {p['packet_id'] for p in self.tx_packets} if step['target_packet_id'] == '*' else {step['target_packet_id']}
+                        if step['kind'] == 'STOP':
+                            self._paused_packets.update(targets)
+                        else:
+                            self._paused_packets.difference_update(targets)
+                        self.log_system(f"Force INIT {index}단계: {step['kind']} {step['target_packet_id']}")
         self.refresh_mode_ui()
-        if new_mode == 'run' and self.init_steps:
+        if new_mode == 'run' and self.init_steps and not force:
             self.init_control.cfg['binding'] = dict(sequence_steps=copy.deepcopy(self.init_steps))
             self.init_control.show()
-            self.label_mode.setText('RUN: Init 실행 중 · 등록 패킷 주기 전송 대기')
+            self._update_mode_status()
             self.init_control.toggle()
 
     def stop_panel_commands(self, reason="패널 정지"):
+        if self.mode == 'run':
+            self.log_system(f'송신 정지: {reason}')
+        self._force_running = False
         self._init_running = False
         if hasattr(self, 'init_control'):
             self.init_control.stop(reason)
@@ -765,27 +927,40 @@ class UserPanelWindow(QWidget):
                 timer.stop()
                 timer.deleteLater()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, '_bus_monitor'):
+            self._bus_monitor.start()
+            self._refresh_bus_status()
+
     def closeEvent(self, event):
+        main = self.main_window
+        if (getattr(main, 'user_panel_only', False) and getattr(main, 'user_panel_window', None) is self
+                and not getattr(main, '_is_closing', False) and not getattr(main.session, 'busy', False)):
+            main.close()
+            event.accept()
+            return
         self.stop_panel_commands("패널 닫힘")
+        self._bus_monitor.stop()
         self._sim_timer.stop()
         self.mode = "standby"
         super().closeEvent(event)
 
     def on_sequence_receive(self, ts, bus, can_id, data, extended, fd, brs=False):
         if self.mode == "run" and self.isVisible():
+            if self._init_running:
+                self.init_control.receive(ts, bus, can_id, data, extended, fd, brs)
             for ctrl in self.widget_controls.values():
                 if isinstance(ctrl, SequenceControl):
                     ctrl.receive(ts, bus, can_id, data, extended, fd, brs)
 
     def refresh_mode_ui(self):
+        self._sync_toolbar_modes()
         is_edit = self.mode == "edit"
         if self.mode != "run":
             self.stop_panel_commands("패널 상태 변경")
-        self.label_mode.setText(
-            "EDIT: create/delete/arrange tools"
-            if self.mode == "edit"
-            else ("STANDARD: RX 갱신 / 모든 TX 정지" if self.mode == "standby" else "RUN: 등록 패킷 주기 전송 / 딜레이 0은 도구 값 변경 시 전송")
-        )
+        self._update_mode_status()
+        self.label_mode.setToolTip('')
 
         if self.mode != "run":
             self._stop_all_frame_timers()
@@ -876,7 +1051,8 @@ class UserPanelWindow(QWidget):
             self.tx_packets = copy.deepcopy(state.get('tx_packets', []))
             self.init_steps = copy.deepcopy(state.get('init_steps', []))
             for cfg in self.widgets_config:
-                reconcile_binding(self.db_messages, cfg.get("binding", {}))
+                for binding in command_bindings(cfg):
+                    reconcile_binding(self.db_messages, binding)
             self.selected_widget_id = state["selected"]
             self.selected_widget_ids = set(state["ids"])
             self.rebuild_grid()
@@ -897,7 +1073,7 @@ class UserPanelWindow(QWidget):
             return
         self.draw_mode = shape_type
         self.draw_start_cell = None
-        self.label_mode.setText(
+        self.label_mode.setToolTip(
             f"EDIT: draw mode active ({shape_type}). Drag on empty canvas area to create shape."
         )
 
@@ -1055,7 +1231,8 @@ class UserPanelWindow(QWidget):
 
     def refresh_dbc_bindings(self):
         for cfg in self.widgets_config:
-            reconcile_binding(self.db_messages, cfg.get("binding", {}))
+            for binding in command_bindings(cfg):
+                reconcile_binding(self.db_messages, binding)
         self.properties.refresh(force=True)
         self._history_current = self._history_snapshot()
 
@@ -1435,7 +1612,7 @@ class UserPanelWindow(QWidget):
 
             # group_box와 tab_container는 자체적으로 제목을 표시하므로,
             # 중복되는 외부 라벨을 생성하지 않습니다.
-            if wtype not in ("group_box", "tab_container"):
+            if wtype not in ("group_box", "tab_container", "slider"):
                 behavior = str(cfg.get("behavior", "none")).upper()
                 title = QLabel(f"[{behavior}] {cfg.get('title', 'Widget')}")
                 title.setProperty("panelTitle", True)
@@ -1453,6 +1630,8 @@ class UserPanelWindow(QWidget):
                 title_widget_for_binding = title
 
             ctrl, child_host = self._create_runtime_widget(cfg)
+            if wtype == "slider":
+                title_widget_for_binding = ctrl.findChild(QLabel, "slider_title")
             # Stretch factor 1 allows the control to expand and fill available vertical space.
             frame_layout.addWidget(ctrl, 1)
 
@@ -1530,7 +1709,7 @@ class UserPanelWindow(QWidget):
                 self._ctrl_click_selected = widget_id in ids
                 ids.add(widget_id)
                 self.selected_widget_ids = ids
-            else:
+            elif widget_id not in self.selected_widget_ids:
                 self.selected_widget_ids = {widget_id}
             self.selected_widget_id = widget_id
             self._refresh_selection_ui()
@@ -1589,7 +1768,7 @@ class UserPanelWindow(QWidget):
                 preview_col_span = max(1, c_end - c_start + 1)
                 self._show_drag_preview(cfg, preview_row_span, preview_col_span, resize_mode=True)
             else:
-                new_parent = cfg.get('parent_id') if self._ctrl_drag_copy else self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
+                new_parent = cfg.get('parent_id') if self._ctrl_drag_copy or len(self.selected_configs()) > 1 else self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
                 # 위젯의 좌상단이 위치할 목표 지점을 오프셋을 적용하여 계산합니다.
                 adjusted_pos = end_pos
                 if self._drag_offset_global:
@@ -1638,6 +1817,12 @@ class UserPanelWindow(QWidget):
                     min_col_span = 1 if wtype == "shape_line" else 4
                     cfg["row_span"] = max(min_row_span, r_end - r_start + 1)
                     cfg["col_span"] = max(min_col_span, c_end - c_start + 1)
+                    self.rebuild_grid()
+                elif len(self.selected_configs()) > 1:
+                    adjusted_pos = end_pos - self._drag_offset_global
+                    row_new, col_new = self._cell_from_global_in_parent(cfg.get('parent_id'), adjusted_pos)
+                    self._move_selected(col_new - self._drag_origin_cell[1],
+                                        row_new - self._drag_origin_cell[0])
                     self.rebuild_grid()
                 else:
                     new_parent = self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
@@ -1717,10 +1902,10 @@ class UserPanelWindow(QWidget):
             def _pressed():
                 if self.mode != "run":
                     return
-                self._emit_tx(cfg, push_value)
+                self._emit_tool_action(cfg, push_value, 'tx_press_value')
 
             def _released():
-                self._emit_tx(cfg, pull_value)
+                self._emit_tool_action(cfg, pull_value, 'tx_release_value')
 
             btn.pressed.connect(_pressed)
             btn.released.connect(_released)
@@ -1737,7 +1922,8 @@ class UserPanelWindow(QWidget):
                 btn.setText("ON" if checked else "OFF")
                 if checked and behavior == "tx":
                     self._uncheck_signal_toggles(cfg)
-                self._emit_tx(cfg, on_value if checked else off_value)
+                self._emit_tool_action(cfg, on_value if checked else off_value,
+                                       'tx_on_value' if checked else 'tx_off_value')
 
             btn.toggled.connect(_toggle)
             return btn, None
@@ -1763,24 +1949,32 @@ class UserPanelWindow(QWidget):
             value_label = QLabel(self._format_slider_value(binding, initial))
             value_label.setObjectName("value_label")
             value_label.setAlignment(Qt.AlignCenter)
-            lay.addWidget(slider, 0, 1)
-            lay.addWidget(value_label, 1, 1)
+            title = QLabel(f"[{str(behavior).upper()}] {cfg.get('title', 'Widget')}")
+            title.setObjectName("slider_title")
+            title.setProperty("panelTitle", True)
+            title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            lay.addWidget(title, 0, 1)
+            lay.addWidget(slider, 1, 1, 1, 2)
+            lay.addWidget(value_label, 2, 1, 1, 2)
             value_input = QLineEdit(self._format_slider_value(binding, initial))
             value_input.setObjectName("slider_value_input")
+            value_input.setMinimumWidth(40)
+            value_input.setMaximumWidth(130)
             value_input.setToolTip("값 입력 후 Set 또는 Enter. 숫자가 아니면 Home 값으로 복귀합니다.")
             set_button = QPushButton("Set")
             set_button.setObjectName("slider_set")
             input_row = QHBoxLayout()
             input_row.addWidget(value_input, 1)
             input_row.addWidget(set_button)
-            lay.addLayout(input_row, 2, 0, 1, 2)
+            lay.addLayout(input_row, 0, 2, Qt.AlignRight)
             home = QPushButton("Home")
             home.setObjectName("slider_home")
             home.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
             home.setToolTip("Return to Initial Value")
-            lay.addWidget(home, 0, 0, 2, 1)
+            lay.addWidget(home, 0, 0, 3, 1)
             lay.setColumnStretch(1, 1)
-            lay.setRowStretch(0, 1)
+            lay.setRowStretch(1, 1)
 
             def _on_changed(v):
                 ratio = 0.0 if steps <= 0 else (v / float(steps))
@@ -1992,6 +2186,22 @@ class UserPanelWindow(QWidget):
         cfg["z_index"] = int(cfg.get("z_index", 0)) - 1
         self.rebuild_grid()
 
+    def _move_selected(self, dx, dy):
+        configs = self.selected_configs()
+        ids = {cfg['id'] for cfg in configs}
+        roots = [cfg for cfg in configs
+                 if not any(self._is_descendant(cfg['id'], wid) for wid in ids if wid != cfg['id'])]
+        if not roots:
+            return
+        # Clamp one shared offset so boundary contact preserves relative positions.
+        dx = max(-min(int(c.get('col', 0)) for c in roots),
+                 min(int(dx), min(self.grid_cols - 1 - int(c.get('col', 0)) for c in roots)))
+        dy = max(-min(int(c.get('row', 0)) for c in roots),
+                 min(int(dy), min(self.grid_rows - 1 - int(c.get('row', 0)) for c in roots)))
+        for cfg in roots:
+            cfg['col'] = int(cfg.get('col', 0)) + dx
+            cfg['row'] = int(cfg.get('row', 0)) + dy
+
     def nudge_selected(self, dx, dy):
         if self.mode != "edit":
             return
@@ -1999,12 +2209,7 @@ class UserPanelWindow(QWidget):
         if not cfg:
             return
 
-        col = int(cfg.get("col", 0)) + int(dx)
-        row = int(cfg.get("row", 0)) + int(dy)
-        col = max(0, min(self.grid_cols - 1, col))
-        row = max(0, min(self.grid_rows - 1, row))
-        cfg["col"] = col
-        cfg["row"] = row
+        self._move_selected(dx, dy)
         self.rebuild_grid()
 
     def resize_selected_span(self, dcol_span, drow_span):
@@ -2104,13 +2309,13 @@ class UserPanelWindow(QWidget):
                 str(binding.get("byte_order", "little_endian")),
             )
 
-        selected_key = signal_key(selected_cfg.get("binding", {}))
+        selected_keys = {signal_key(b) for b in command_bindings(selected_cfg, enabled_only=True)}
         for cfg in self.widgets_config:
             if cfg.get("id") == selected_cfg.get("id"):
                 continue
             if cfg.get("widget_type") != "toggle" or cfg.get("behavior") != "tx":
                 continue
-            if signal_key(cfg.get("binding", {})) != selected_key:
+            if not selected_keys.intersection(signal_key(b) for b in command_bindings(cfg, enabled_only=True)):
                 continue
             ctrl = self.widget_controls.get(cfg.get("id"))
             if isinstance(ctrl, QPushButton) and ctrl.isCheckable():
@@ -2122,16 +2327,47 @@ class UserPanelWindow(QWidget):
                 finally:
                     ctrl.blockSignals(was_blocked)
 
+    def _emit_tool_action(self, cfg, value, action):
+        if cfg.get('tx_commands'):
+            cfg = dict(cfg, _tx_action=action)
+        self._emit_tx(cfg, value)
+
     def _emit_tx(self, cfg, value):
         if self.mode != "run" or self._init_running or not self.isVisible() or cfg.get("behavior") != "tx":
             return
         try:
-            packet = find_packet(self.tx_packets, cfg.get("binding", {}))
-            if packet is None:
-                raise ValueError("Register the TX packet first.")
-            runtime = self._packet_runtimes[packet['packet_id']]
-            if runtime.stage(cfg['binding'], value) and packet['cycle'] == 0:
-                runtime.send()
+            # Prepare all overlays before committing so invalid commands cannot
+            # leave a partially updated set of periodic packets.
+            from .binding import pack_value
+            pending = {}
+            for binding in command_bindings(cfg, enabled_only=True):
+                packet = find_packet(self.tx_packets, binding)
+                if packet is None:
+                    raise ValueError("Register the TX packet first.")
+                key = packet['packet_id']
+                runtime = self._packet_runtimes[key]
+                command_value = binding.get(cfg['_tx_action'], value) if cfg.get('_tx_action') else value
+                pending[key] = pack_value(pending.get(key, runtime.overlay), binding, command_value)
+            changed = []
+            for key, overlay in pending.items():
+                runtime = self._packet_runtimes[key]
+                if overlay != runtime.overlay:
+                    previous = bytearray(runtime.overlay)
+                    runtime.overlay = overlay
+                    changed.append((runtime, previous))
+            errors = []
+            for runtime, previous in changed:
+                if runtime.packet['cycle'] == 0:
+                    try:
+                        runtime.send()
+                    except Exception as exc:
+                        # Failed immediate commands are not queued as sent values.
+                        # A later explicit action with the same value can retry.
+                        runtime.overlay = previous
+                        packet = runtime.packet
+                        errors.append(f"BUS {packet['bus']} / 0x{packet['id']:X}: {exc}")
+            if errors:
+                self._report_packet_error(' | '.join(errors))
         except Exception as exc:
             self._report_packet_error(exc)
 
@@ -2443,6 +2679,7 @@ class UserPanelWindow(QWidget):
     def _panel_data(self):
         return {
             "version": 5,
+            "title": self.windowTitle(),
             "pages": copy.deepcopy(self.pages),
             "active_page_id": self.active_page_id,
             "tx_packets": copy.deepcopy(self.tx_packets),
@@ -2459,8 +2696,10 @@ class UserPanelWindow(QWidget):
             return
         try:
             save_panel_json(path, self._panel_data())
+            self.log_system(f'패널 설정 저장: {path}')
             QMessageBox.information(self, "Saved", "User panel saved successfully.")
         except Exception as e:
+            self.log_system(f'패널 설정 저장 실패: {e}', 'ERROR')
             QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
 
     def load_panel_from_file(self):
@@ -2471,19 +2710,23 @@ class UserPanelWindow(QWidget):
         try:
             data = load_panel_json(path)
             self._load_panel_data(data)
+            self.set_mode('standby')
+            self.log_system(f'패널 설정 불러오기: {path}')
             QMessageBox.information(self, "Loaded", "User panel loaded successfully.")
         except Exception as e:
+            self.log_system(f'패널 설정 불러오기 실패: {e}', 'ERROR')
             QMessageBox.critical(self, "Error", f"Load failed:\n{e}")
 
     def _load_panel_data(self, data):
         if not isinstance(data, dict):
             raise ValueError("Invalid panel file")
+        self.setWindowTitle(str(data.get('title') or 'User Panel'))
 
         self.stop_panel_commands('패널 불러오기')
         self._packet_runtimes.clear()
         self.tx_packets = copy.deepcopy(data.get('tx_packets', []))
         self.init_steps = copy.deepcopy(data.get('init_steps', []))
-        validate_steps(self.init_steps, actions_only=True, allow_empty=True)
+        validate_steps(self.init_steps, allow_empty=True)
         for packet in self.tx_packets:
             packet.setdefault('packet_id', str(uuid.uuid4()))
 
@@ -2504,11 +2747,12 @@ class UserPanelWindow(QWidget):
         self.selected_widget_ids.clear()
         for cfg in self.widgets_config:
             self._normalize_config(cfg)
-            if cfg.get('behavior') == 'tx' and cfg.get('widget_type') != 'sequence':
-                packet = find_packet(self.tx_packets, cfg['binding'])
-                if packet:
-                    bind_packet(cfg['binding'], packet)
-            reconcile_binding(self.db_messages, cfg["binding"])
+            for binding in command_bindings(cfg):
+                if cfg.get('behavior') == 'tx' and cfg.get('widget_type') != 'sequence':
+                    packet = find_packet(self.tx_packets, binding)
+                    if packet:
+                        bind_packet(binding, packet)
+                reconcile_binding(self.db_messages, binding)
         self.selected_widget_id = next((c['id'] for c in self.widgets_config if self._page_for(c) == self.active_page_id), None)
 
         shape_count = sum(1 for c in self.widgets_config if str(c.get("widget_type", "")).startswith("shape_"))
@@ -2537,11 +2781,15 @@ class UserPanelWindow(QWidget):
         try:
             db_paths = self.main_window.get_db_file_paths_by_bus()
             out_path = save_bundle(path, self._panel_data(), db_paths)
+            self.log_system(f'패널 패키지 저장: {out_path}')
             QMessageBox.information(self, "Saved", f"Package saved:\n{out_path}")
         except Exception as e:
+            self.log_system(f'패널 패키지 저장 실패: {e}', 'ERROR')
             QMessageBox.critical(self, "Error", f"Package save failed:\n{e}")
 
     def load_package(self):
+        if not self._authorize_communication():
+            return
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load User Panel Package",
@@ -2557,8 +2805,12 @@ class UserPanelWindow(QWidget):
 
         try:
             panel_data, db_paths_by_bus = load_bundle(path)
+            self.set_mode('standby')
             self.main_window.replace_db_files_by_bus(db_paths_by_bus)
             self._load_panel_data(panel_data)
+            self.set_mode('standby')
+            self.log_system(f'패널/DBC 패키지 불러오기: {path}')
             QMessageBox.information(self, "Loaded", "Package loaded successfully.")
         except Exception as e:
+            self.log_system(f'패널 패키지 불러오기 실패: {e}', 'ERROR')
             QMessageBox.critical(self, "Error", f"Package load failed:\n{e}")

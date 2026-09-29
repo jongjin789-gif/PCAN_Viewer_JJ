@@ -9,6 +9,7 @@ from src.tx_panel import TxPacketDialog
 from src.tx_counter import counter_payload
 from src.crc_utils import calculate_crc16_ccitt_false
 from .binding import pack_value, bit_positions
+from .commands import command_bindings
 from .masked_data import MaskedDataInput
 
 
@@ -59,6 +60,10 @@ def references_packet(steps, packet):
     return False
 
 
+class UnregisteredPacketError(ValueError):
+    """An editable tool has no registered transmission target yet."""
+
+
 def validate_tool(packets, cfg):
     if cfg.get('behavior') != 'tx':
         return
@@ -81,17 +86,31 @@ def validate_tool(packets, cfg):
                         validate_command_data(step['data_mask'], packet['length'])
                     step['packet']['data'] = list(step['data_override'])
         return
-    binding = cfg['binding']
-    packet = find_packet(packets, binding)
-    if packet is None:
-        raise ValueError(f"{cfg.get('title', 'TX')}: 먼저 TX 패킷을 등록하고 도구에 연결하세요.")
-    bind_packet(binding, packet)
-    bit_positions(binding, packet['length'])
+    for binding in command_bindings(cfg):
+        packet = find_packet(packets, binding)
+        if packet is None:
+            raise UnregisteredPacketError(f"{cfg.get('title', 'TX')}: 먼저 TX 패킷을 등록하고 도구에 연결하세요.")
+        bind_packet(binding, packet)
+        bit_positions(binding, packet['length'])
 
 
 def validate_command_data(data, length):
     if not isinstance(data, (list, bytes, bytearray)) or len(data) != length or any(type(b) is not int or not 0 <= b <= 255 for b in data):
         raise ValueError('CMD 전용 데이터 길이/HEX 값을 확인하세요. 등록 패킷 길이와 일치해야 합니다.')
+
+
+def connected_packet_bus(main, packet):
+    bus = getattr(main, 'buses', {}).get(packet['bus'])
+    if bus is None:
+        raise ValueError(f"CAN BUS {packet['bus']}가 연결되지 않았습니다.")
+    capabilities = getattr(main, 'bus_capabilities', {}).get(packet['bus'], {})
+    if 'is_fd' not in capabilities:
+        raise ValueError(f"CAN BUS {packet['bus']}의 연결 타입을 확인할 수 없습니다.")
+    if bool(packet.get('is_fd', False)) != bool(capabilities['is_fd']):
+        packet_type = 'FD' if packet.get('is_fd') else 'Classic'
+        bus_type = 'FD' if capabilities['is_fd'] else 'Classic'
+        raise ValueError(f"CAN BUS {packet['bus']} 타입 불일치: 패킷 {packet_type} / 연결 {bus_type}")
+    return bus
 
 
 class PacketRuntime:
@@ -111,11 +130,7 @@ class PacketRuntime:
 
     def send(self, data_override=None, data_mask=None):
         p = self.packet
-        bus = getattr(self.main, 'buses', {}).get(p['bus'])
-        if bus is None:
-            raise ValueError(f"CAN BUS {p['bus']}가 연결되지 않았습니다.")
-        if p['is_fd'] and not self.main.bus_capabilities[p['bus']].get('is_fd'):
-            raise ValueError(f"CAN BUS {p['bus']}를 FD로 연결하세요.")
+        bus = connected_packet_bus(self.main, p)
         if data_override is not None:
             validate_command_data(data_override, p['length'])
         payload = bytes(self.overlay if data_override is None else data_override)
@@ -325,7 +340,7 @@ class PacketRegistryDialog(QDialog):
             if references_packet(steps, packet):
                 QMessageBox.warning(self, '패킷 삭제', 'Init/시퀀스/실패 처리에서 참조하는 패킷입니다. 해당 명령을 먼저 변경하세요.')
                 return
-            if any(c.get('behavior') == 'tx' and find_packet([packet], c.get('binding', {})) for c in self.panel.widgets_config):
+            if any(c.get('behavior') == 'tx' and any(find_packet([packet], b) for b in command_bindings(c)) for c in self.panel.widgets_config):
                 QMessageBox.warning(self, '패킷 삭제', '연결된 TX 도구를 먼저 삭제하거나 다른 패킷에 연결하세요.')
                 return
             del self.packets[row]

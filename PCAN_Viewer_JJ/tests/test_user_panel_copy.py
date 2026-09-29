@@ -92,6 +92,43 @@ class ToolCopyTest(unittest.TestCase):
         panel.paste_tools()
         self.assertEqual(len(panel.widgets_config), 2)
 
+    def test_drag_moves_selection_together_and_undoes_once(self):
+        panel = self.panel([self.cfg('a'), self.cfg('b', 5, 6)])
+        panel.selected_widget_ids = {'a', 'b'}
+        panel.selected_widget_id = 'a'
+        original = copy.deepcopy(panel.widgets_config)
+        frame = panel.widget_frames['a']
+        start = QPoint(20, 20)
+        end = start + QPoint(64, 64)
+        for kind, pos, button, buttons in [
+            (QMouseEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton),
+            (QMouseEvent.MouseMove, end, Qt.NoButton, Qt.LeftButton),
+            (QMouseEvent.MouseButtonRelease, end, Qt.LeftButton, Qt.NoButton),
+        ]:
+            event = QMouseEvent(kind, QPointF(pos), QPointF(frame.mapToGlobal(pos)),
+                                button, buttons, Qt.NoModifier)
+            QApplication.sendEvent(frame, event)
+        a, b = panel.widgets_config
+        self.assertEqual(len(panel.selected_configs()), 2)
+        self.assertGreater(a['row'], original[0]['row'])
+        self.assertEqual((b['row'] - a['row'], b['col'] - a['col']), (4, 5))
+        panel.undo_edit()
+        self.assertEqual(panel.widgets_config, original)
+        panel.redo_edit()
+        self.assertGreater(panel.widgets_config[0]['row'], original[0]['row'])
+
+    def test_multi_nudge_boundary_and_selected_group_child(self):
+        panel = self.panel([self.cfg('a'), self.cfg('b', 5, 6),
+                            self.cfg('child', 0, 0, 'a')])
+        panel.selected_widget_ids = {'a', 'b', 'child'}
+        panel.selected_widget_id = 'a'
+        panel.nudge_selected(-10, -10)
+        self.assertEqual([(c['row'], c['col']) for c in panel.widgets_config],
+                         [(0, 0), (4, 5), (0, 0)])
+        panel.nudge_selected(1, 1)
+        self.assertEqual([(c['row'], c['col']) for c in panel.widgets_config],
+                         [(1, 1), (5, 6), (0, 0)])
+
     def test_copied_tx_can_bind_other_bus_without_changing_source(self):
         from src.user_panel_v2.packets import bind_packet
         p = dict(packet_id='p', bus=1, id=0x123, length=8, data=[0]*8,

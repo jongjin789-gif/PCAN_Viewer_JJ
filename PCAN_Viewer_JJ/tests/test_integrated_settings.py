@@ -81,6 +81,36 @@ class IntegratedSettingsTest(unittest.TestCase):
         graph.show()
         return graph
 
+    def test_unregistered_panel_tools_restore_without_enabling_transmission(self):
+        self.main.open_user_panel()
+        panel = self.main.user_panel_window
+        panel._load_panel_data(dict(widgets=[dict(id='legacy', title='Unfinished TX',
+            behavior='tx', widget_type='toggle', binding=dict(bus=2, can_id=0x2b))]))
+        saved = self.session.capture()
+        write_session(self.file, saved)
+        self.assertTrue(self.session.load(self.file))
+        self.session.report.assert_not_called()
+        restored = self.main.user_panel_window
+        self.assertEqual(restored.mode, 'standby')
+        self.assertEqual(restored.widgets_config[0]['id'], 'legacy')
+        self.assertEqual(restored.tx_packets, [])
+        self.assertIn('송신 준비 미완료', restored.system_log.text.toPlainText())
+        restored.set_mode('run')
+        self.assertEqual(restored.mode, 'standby')
+        self.assertFalse(restored._frame_timers)
+
+    def test_invalid_registered_packet_still_rejects_unfinished_panel(self):
+        self.main.open_user_panel()
+        panel = self.main.user_panel_window
+        panel._load_panel_data(dict(widgets=[dict(id='legacy', behavior='tx', widget_type='toggle',
+                                                binding=dict(bus=2, can_id=0x2b))]))
+        saved = self.session.capture()
+        bad = dict(packet(), packet_id='broken', length=12, is_fd=False)
+        saved['panel']['data']['tx_packets'] = [bad]
+        with self.assertRaises(ValueError):
+            self.session.prepare(saved)
+        self.assertIs(self.main.user_panel_window, panel)
+
     def test_roundtrip_embedded_db_graph_panel_and_stopped_tx(self):
         raw = self.db()
         sym = self.db(2, sym=True)

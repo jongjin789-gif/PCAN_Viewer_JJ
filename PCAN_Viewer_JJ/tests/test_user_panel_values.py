@@ -55,6 +55,7 @@ class UserPanelValuesTest(unittest.TestCase):
                         _emit_tx=lambda cfg, value: sent.append(value),
                         _uncheck_signal_toggles=lambda cfg: None,
                     )
+                    owner._emit_tool_action = lambda cfg, value, action: UserPanelWindow._emit_tool_action(owner, cfg, value, action)
                     button, _ = UserPanelWindow._create_runtime_widget(owner, config)
                     button.click()
                     if widget_type == "toggle":
@@ -67,6 +68,7 @@ class UserPanelValuesTest(unittest.TestCase):
         sent = []
         owner = SimpleNamespace(widgets_config=[], widget_controls={})
         owner._emit_tx = lambda cfg, value: sent.append((cfg["id"], value))
+        owner._emit_tool_action = lambda cfg, value, action: UserPanelWindow._emit_tool_action(owner, cfg, value, action)
         owner._uncheck_signal_toggles = lambda cfg: UserPanelWindow._uncheck_signal_toggles(owner, cfg)
         bindings = [
             {}, {}, {"bus": 2}, {"can_id": 0x200}, {"start_bit": 8},

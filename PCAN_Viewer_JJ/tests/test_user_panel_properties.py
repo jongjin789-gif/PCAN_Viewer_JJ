@@ -133,7 +133,8 @@ class PropertiesTest(unittest.TestCase):
         self.assertEqual(p.widgets_config, before)
         self.assertEqual(nominal[1].currentIndex(), 0)
         main.buses[2] = None
-        prop.apply_checked()
+        with patch.object(p, '_authorize_communication', return_value=True):
+            prop.apply_checked()
         self.assertTrue(all(c.currentIndex() == 1 for c in nominal.values()))
         self.assertEqual(p.channel_settings, {"1": {"bitrate": 250000}, "2": {"bitrate": 250000}})
 

@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QSlider
+from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QSlider, QLineEdit
 from src.user_panel_v2.window import UserPanelWindow
 from src.user_panel_v2.config_dialog import WidgetConfigDialog
 
@@ -35,7 +35,12 @@ class SliderTest(unittest.TestCase):
             self.app.processEvents()
             self.assertGreaterEqual(home.width(), home.sizeHint().width())
             self.assertLess(home.geometry().right(), slider.geometry().left())
-            self.assertEqual(ctrl.layout().getItemPosition(ctrl.layout().indexOf(home)), (0, 0, 2, 1))
+            entry = ctrl.findChild(QLineEdit, "slider_value_input")
+            set_button = ctrl.findChild(QPushButton, "slider_set")
+            self.assertLess(entry.geometry().right(), set_button.geometry().left())
+            self.assertLess(entry.geometry().center().y(), slider.geometry().center().y())
+            self.assertGreater(label.geometry().center().y(), slider.geometry().center().y())
+            self.assertGreaterEqual(home.geometry().bottom(), label.geometry().bottom())
             ctrl.deleteLater()
         panel.db_messages = {1: {1: SimpleNamespace(get_signal_by_name=lambda name: SimpleNamespace(is_float=False))}}
         self.assertEqual(panel._format_slider_value(dict(bus=1, can_id=1, signal_name="Count", tx_resolution=0.1), 5), "5")

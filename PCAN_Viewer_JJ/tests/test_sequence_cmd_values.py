@@ -55,7 +55,7 @@ class CommandValuesTest(unittest.TestCase):
                         xorout=0, refin=False, refout=False, result_byte_order='little_endian')}
         msg = Message(p['id'], 'Test', 8, [Signal('CRC', 0, 16), Signal('Count', 16, 8)])
         sent = []
-        main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)}, bus_capabilities={1: {'is_fd': True}})
+        main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)}, bus_capabilities={1: {'is_fd': False}})
         runtime = PacketRuntime(p, {1: {p['id']: msg}}, main)
         runtime.overlay[3] = 99
         override = [0, 0, 4, 17, 18, 19, 20, 21]
@@ -73,7 +73,7 @@ class CommandValuesTest(unittest.TestCase):
         p = packet()
         sent = []
         main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)},
-                               bus_capabilities={1: {'is_fd': True}}, record_tx_activity=lambda *args: None)
+                               bus_capabilities={1: {'is_fd': False}}, record_tx_activity=lambda *args: None)
         cmd = dict(kind='CMD', packet=p, data_override=[11]*8)
         panel = UserPanelWindow(main, {})
         panel._load_panel_data(dict(tx_packets=[p], widgets=[], init_steps=[cmd]))
@@ -112,7 +112,7 @@ class CommandValuesTest(unittest.TestCase):
     def test_failed_cmd_preserves_last_successful_data(self):
         p = packet()
         sent = []
-        main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)}, bus_capabilities={1: {'is_fd': True}})
+        main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)}, bus_capabilities={1: {'is_fd': False}})
         runtime = PacketRuntime(p, {}, main)
         runtime.send([17]*8)
         with patch.object(main.buses[1], 'send', side_effect=RuntimeError('failed')):
@@ -126,7 +126,7 @@ class CommandValuesTest(unittest.TestCase):
         p['cycle'] = 10
         sent = []
         main = SimpleNamespace(buses={1: SimpleNamespace(send=sent.append)},
-                               bus_capabilities={1: {'is_fd': True}}, record_tx_activity=lambda *args: None)
+                               bus_capabilities={1: {'is_fd': False}}, record_tx_activity=lambda *args: None)
         panel = UserPanelWindow(main, {})
         panel._load_panel_data(dict(tx_packets=[p], widgets=[]))
         panel.show()

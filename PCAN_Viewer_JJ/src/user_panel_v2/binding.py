@@ -65,7 +65,12 @@ def pack_value(payload, binding, value):
 def validate_config(cfg):
     if cfg.get("behavior") not in ("tx", "rx") or cfg.get("widget_type") == "sequence":
         return
-    binding = cfg["binding"]
+    from .commands import command_bindings
+    for binding in command_bindings(cfg):
+        validate_binding(binding)
+
+
+def validate_binding(binding):
     if not 0 <= int(binding.get("can_id", 0)) <= 0x1fffffff:
         raise ValueError("CAN ID must be within 0x000..0x1FFFFFFF.")
     dlc = int(binding.get("dlc", 8))

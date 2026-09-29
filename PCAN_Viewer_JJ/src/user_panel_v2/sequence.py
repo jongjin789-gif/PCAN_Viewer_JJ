@@ -103,6 +103,9 @@ class SequenceControl(QWidget):
         self.button.setStyleSheet(f"background:{self.COLORS[state]}; color:{color}; padding:4px;")
 
     def write(self, message, color="black"):
+        if hasattr(self.owner, 'log_system'):
+            title = 'INIT' if self.cfg.get('is_init') else self.cfg.get('title', '시퀀스')
+            self.owner.log_system(f'{title}: {message}', 'ERROR' if color == '#B3261E' else 'INFO')
         stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         cursor = self.log.textCursor()
         cursor.movePosition(QTextCursor.End)
@@ -160,6 +163,11 @@ class SequenceControl(QWidget):
             self.stop("패널 상태 변경")
         elif any(self.owner.main_window.buses.get(bus) is None for bus in self.required_buses):
             self.fail("CAN 연결 해제")
+        elif self.cfg.get('is_init') and hasattr(self.owner, '_check_init_connections'):
+            try:
+                self.owner._check_init_connections()
+            except ValueError as exc:
+                self.fail(str(exc))
 
     def toggle(self):
         if self.running:
@@ -175,7 +183,7 @@ class SequenceControl(QWidget):
         try:
             self.steps = copy.deepcopy(self.cfg.get("binding", {}).get("sequence_steps", []))
             failures = copy.deepcopy(self.cfg.get('binding', {}).get('sequence_failure_steps', []))
-            validate_steps(self.steps, actions_only=self.cfg.get('is_init', False))
+            validate_steps(self.steps)
             validate_steps(failures, actions_only=True, allow_empty=True)
             if hasattr(self.owner, 'tx_packets'):
                 from .packets import validate_tool
@@ -188,10 +196,8 @@ class SequenceControl(QWidget):
                 if s["kind"] not in ('CMD', 'RCV'):
                     continue
                 p = s["packet"]
-                if main.buses.get(p["bus"]) is None:
-                    raise ValueError(f"Bus {p['bus']} is not connected.")
-                if p.get("is_fd") and not main.bus_capabilities[p["bus"]].get("is_fd"):
-                    raise ValueError(f"Bus {p['bus']} requires FD mode.")
+                from .packets import connected_packet_bus
+                connected_packet_bus(main, p)
         except Exception as exc:
             self.fail(str(exc))
             return

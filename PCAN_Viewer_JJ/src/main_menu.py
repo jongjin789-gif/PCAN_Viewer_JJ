@@ -62,6 +62,7 @@ def install_main_menu(main):
                               ('모니터링 데이터 Clear', main.btn_clear_data)):
             action(view, label, button.click, button)
         action(view, 'Sync 그래프 통합 보기', main.open_combined_view)
+        action(view, '유저 패널 제목 변경…', main.rename_user_panel)
 
     help_menu = bar.addMenu('도움말')
     for label, filename in (('사용 설명서', 'MANUAL.md'),

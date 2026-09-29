@@ -2,6 +2,7 @@ import uuid
 import copy
 from .binding import matching_signal, validate_config
 from .packets import find_packet, bind_packet
+from .commands import MULTI_TYPES
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -13,6 +14,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -38,9 +41,12 @@ class WidgetConfigDialog(QDialog):
         grid_cols=24,
         embedded=False,
         tx_packets=None,
+        allow_multi=True,
     ):
         super().__init__(parent)
         self.embedded = embedded
+        self.allow_multi = allow_multi
+        self.tx_commands = []
         self._mapping_sync = False
         self._loading = True
         if embedded:
@@ -411,6 +417,29 @@ class WidgetConfigDialog(QDialog):
         form_wrap_lay.addWidget(grp_tool)
         form_wrap_lay.addWidget(grp_comm)
         form_wrap_lay.addWidget(grp_value)
+        self.grp_commands = QGroupBox("멀티 명령")
+        commands_layout = QVBoxLayout(self.grp_commands)
+        self.chk_primary_enabled = QCheckBox("기본 명령 활성 (위 통신/값 설정)")
+        self.chk_primary_enabled.setChecked(True)
+        commands_layout.addWidget(self.chk_primary_enabled)
+        command_hint = QLabel("체크한 명령만 적용됩니다. 슬라이더는 현재 값을 공통 사용하며,\n버튼/토글은 각 명령에 설정한 동작 값을 사용합니다.\n체크 해제는 등록 패킷의 주기 송신을 정지하지 않습니다.")
+        command_hint.setWordWrap(True)
+        commands_layout.addWidget(command_hint)
+        self.command_list = QListWidget()
+        self.command_list.setMaximumHeight(150)
+        commands_layout.addWidget(self.command_list)
+        command_buttons = QHBoxLayout()
+        for text, callback in (("추가", lambda: self._edit_command(False)),
+                               ("수정", lambda: self._edit_command(True)),
+                               ("삭제", self._remove_command)):
+            button = QPushButton(text)
+            button.clicked.connect(callback)
+            command_buttons.addWidget(button)
+        commands_layout.addLayout(command_buttons)
+        self.command_list.itemChanged.connect(self._command_checked)
+        self.command_list.itemDoubleClicked.connect(lambda _: self._edit_command(True))
+        self.chk_primary_enabled.toggled.connect(self._on_any_changed)
+        form_wrap_lay.addWidget(self.grp_commands)
         form_wrap_lay.addWidget(grp_rx)
         form_wrap_lay.addWidget(grp_shape)
         form_wrap_lay.addStretch()
@@ -522,6 +551,66 @@ class WidgetConfigDialog(QDialog):
         self._apply_precision_setting()
         self._update_visibility()
 
+    def _refresh_commands(self):
+        self.command_list.blockSignals(True)
+        self.command_list.clear()
+        for command in self.tx_commands:
+            binding = command['binding']
+            item = QListWidgetItem(f"{command.get('title', '명령')} · BUS {binding.get('bus', 1)} · "
+                                   f"0x{int(binding.get('can_id', 0)):X} · "
+                                   f"{binding.get('signal_name') or 'Bit ' + str(binding.get('start_bit', 0))}")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if command.get('enabled', True) else Qt.Unchecked)
+            self.command_list.addItem(item)
+        self.command_list.blockSignals(False)
+
+    def _command_checked(self, item):
+        self.tx_commands[self.command_list.row(item)]['enabled'] = item.checkState() == Qt.Checked
+        self._on_any_changed()
+
+    def _remove_command(self):
+        row = self.command_list.currentRow()
+        if row >= 0:
+            del self.tx_commands[row]
+            self._refresh_commands()
+            self._on_any_changed()
+
+    def _edit_command(self, editing):
+        row = self.command_list.currentRow()
+        if editing and row < 0:
+            return
+        preset = self.get_config()
+        if preset is None:
+            return
+        preset.pop('tx_commands', None)
+        if editing:
+            preset.update(title=self.tx_commands[row].get('title', '명령'),
+                          binding=copy.deepcopy(self.tx_commands[row]['binding']))
+        dialog = WidgetConfigDialog(self.db_messages, self, preset=preset,
+                                    fixed_behavior='tx', tx_packets=self.tx_packets,
+                                    live_preview_default=False, allow_multi=False)
+        dialog.setWindowTitle('추가 명령 설정')
+        dialog.combo_widget_type.setEnabled(False)
+        if preset['widget_type'] == 'slider':
+            for field in (dialog.spin_min, dialog.spin_max, dialog.spin_resolution, dialog.spin_slider_initial):
+                field.setEnabled(False)
+                field.setToolTip('슬라이더 범위와 초기값은 기본 도구 설정을 사용합니다.')
+        for field in (dialog.spin_row, dialog.spin_col, dialog.spin_row_span,
+                      dialog.spin_col_span, dialog.combo_parent_tool, dialog.combo_title_align):
+            field.setEnabled(False)
+        if dialog.exec_() == QDialog.Accepted:
+            config = dialog.get_config()
+            if config is not None:
+                command = dict(title=config['title'], binding=config['binding'],
+                               enabled=self.tx_commands[row].get('enabled', True) if editing else True)
+                if editing:
+                    self.tx_commands[row] = command
+                else:
+                    self.tx_commands.append(command)
+                self._refresh_commands()
+                self._on_any_changed()
+        dialog.deleteLater()
+
     def _register_row(self, form, field_widget):
         self._row_handles[field_widget] = (form, field_widget)
 
@@ -630,6 +719,7 @@ class WidgetConfigDialog(QDialog):
         is_group_container = wtype in ("group_box", "tab_container")
         is_tx = behavior == "tx"
         is_rx = behavior == "rx"
+        self.grp_commands.setVisible(self.allow_multi and is_tx and wtype in MULTI_TYPES)
 
         self.grp_comm.setVisible(not is_shape and not is_group_container)
         self.grp_shape.setVisible(is_shape)
@@ -1028,6 +1118,8 @@ class WidgetConfigDialog(QDialog):
             "parent_id": self.combo_parent_tool.currentData(),
             "z_index": 0,
             "behavior": self.combo_behavior.currentText(),
+            "primary_enabled": self.chk_primary_enabled.isChecked(),
+            "tx_commands": copy.deepcopy(self.tx_commands),
             "binding": {
                 "bus": int(self.combo_bus.currentText()),
                 "can_id": int(can_id),
@@ -1082,6 +1174,9 @@ class WidgetConfigDialog(QDialog):
     def set_config(self, config):
         was_loading = self._loading
         self._loading = True
+        self.tx_commands = copy.deepcopy(config.get('tx_commands', []))
+        self.chk_primary_enabled.setChecked(config.get('primary_enabled', True))
+        self._refresh_commands()
         self._config_id = str(config.get("id") or self._config_id)
         self.edit_title.setText(config.get("title", "Widget"))
         self.spin_row.setValue(int(config.get("row", 0)))

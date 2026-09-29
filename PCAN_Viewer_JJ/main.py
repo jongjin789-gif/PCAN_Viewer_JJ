@@ -11,27 +11,36 @@ from src.main_window import UniversalCANMonitor
 # User panel edit-mode password settings (modifiable by code)
 USER_PANEL_EDIT_PASSWORD_ENABLED = True
 USER_PANEL_EDIT_PASSWORD = "1234"
+USER_PANEL_COMMUNICATION_PASSWORD = "1234"
 
-def get_viewer_mode():
-    """PCAN_Viewer_JJ.pk 파일의 최상단에서 viewer_mode_only 값을 읽어옵니다."""
+def get_launch_options():
+    """Read deployment flags beside the executable, independent of saved sessions."""
     if getattr(sys, 'frozen', False):
         base_dir = os.path.dirname(sys.executable)
     else:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         
     pk_path = os.path.join(base_dir, "PCAN_Viewer_JJ.pk")
-    viewer_only = False
+    options = {'viewer_mode_only': False, 'user_panel_only': False}
     
     if os.path.exists(pk_path):
         try:
             with open(pk_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                if isinstance(data, dict) and "viewer_mode_only" in data:
-                    viewer_only = bool(data["viewer_mode_only"])
+                if isinstance(data, dict):
+                    for key in options:
+                        options[key] = data.get(key) is True
         except Exception:
             pass
             
-    return viewer_only
+    # Panel-only deployment takes precedence over the legacy log viewer flag.
+    if options['user_panel_only']:
+        options['viewer_mode_only'] = False
+    return options
+
+
+def get_viewer_mode():
+    return get_launch_options()['viewer_mode_only']
 
 if __name__ == '__main__':
     if platform.system() == 'Windows':
@@ -67,15 +76,21 @@ if __name__ == '__main__':
 
     exit_code = 1
     try:
-        viewer_mode = get_viewer_mode()
+        options = get_launch_options()
         window = UniversalCANMonitor(
-            viewer_only=viewer_mode,
+            viewer_only=options['viewer_mode_only'],
+            user_panel_only=options['user_panel_only'],
+            communication_password=USER_PANEL_COMMUNICATION_PASSWORD,
             user_panel_security={
                 "enabled": USER_PANEL_EDIT_PASSWORD_ENABLED,
                 "password": USER_PANEL_EDIT_PASSWORD,
             },
         )
-        window.show()
+        if options['user_panel_only']:
+            window.tx_panel.stop_all_timers()
+            window.open_user_panel()
+        else:
+            window.show()
         exit_code = app.exec_()
     finally:
         # 프로그램 종료 시, 시스템 절전 방지 설정을 원래대로 복원

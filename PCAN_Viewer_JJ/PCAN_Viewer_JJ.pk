@@ -1,5 +1,6 @@
 {
     "viewer_mode_only": false,
+    "user_panel_only": false,
     "tx_packets": [],
     "db_files": {
         "1": [

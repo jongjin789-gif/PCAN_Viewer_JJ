@@ -36,7 +36,7 @@ class InitSequenceTest(unittest.TestCase):
     def make_panel(self, packets, init=None):
         self.sent = []
         main = SimpleNamespace(buses={1: SimpleNamespace(send=self.sent.append)},
-                               bus_capabilities={1: {'is_fd': True}}, record_tx_activity=lambda *args: None)
+                               bus_capabilities={1: {'is_fd': False}}, record_tx_activity=lambda *args: None)
         panel = UserPanelWindow(main, {})
         panel._load_panel_data(dict(tx_packets=packets, init_steps=init or [], widgets=[]))
         panel.show()
@@ -102,7 +102,7 @@ class InitSequenceTest(unittest.TestCase):
             panel.set_mode('run')
         self.assertEqual(panel.mode, 'standby')
         self.assertFalse(panel._frame_timers)
-        self.assertIn('NG', panel.label_mode.text())
+        self.assertIn('INIT 실패', panel.system_log.text.toPlainText())
 
     def test_timeout_runs_failure_commands_once_and_reports_ng(self):
         p = packet()

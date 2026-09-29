@@ -58,7 +58,9 @@ class SessionManager(QObject):
         self.timer.start()
 
     def report(self, title, summary, issues):
-        box = QMessageBox(self.main)
+        if self.main.user_panel_window is not None:
+            self.main.user_panel_window.log_system(summary + ': ' + ' | '.join(issues), 'WARN')
+        box = QMessageBox(self.main.user_panel_window or self.main)
         box.setWindowTitle(title)
         box.setIcon(QMessageBox.Warning)
         box.setText(summary)
@@ -103,7 +105,7 @@ class SessionManager(QObject):
             packet['count'] = 0
             packets.append(packet)
         graphs = [graph_state(g) for g in m.active_graphs
-                  if g.isVisible() or getattr(g, 'is_in_combined_view', False)]
+                  if g.isVisible() or getattr(g, 'is_in_combined_view', False) or getattr(g, '_panel_only_hidden', False)]
         panel = m.user_panel_window
         panel_state = None
         if panel is not None:
@@ -152,7 +154,7 @@ class SessionManager(QObject):
         """Build hidden replacement widgets with disconnected CAN, without touching live state."""
         from src.graph_realtime import SignalGraphWindow
         from src.user_panel import UserPanelWindow
-        from src.user_panel_v2.packets import validate_packet
+        from src.user_panel_v2.packets import validate_packet, UnregisteredPacketError
         from src.user_panel_v2.sequence import validate_steps
         validate_structure(data)
         prepared = dict(databases={}, messages={1: {}, 2: {}, 3: {}}, graphs=[], panel=None)
@@ -202,7 +204,14 @@ class SessionManager(QObject):
                 prepared['panel'] = panel
                 panel._load_panel_data(copy.deepcopy(data['panel']['data']))
                 if strict:
-                    panel._prepare_registered_packets()
+                    # Restore editable, unfinished tools without allowing transmission.
+                    # Packet corruption still rejects the file before readiness checks.
+                    for packet in panel.tx_packets:
+                        validate_packet(packet, prepared['messages'])
+                    try:
+                        panel._prepare_registered_packets()
+                    except UnregisteredPacketError as exc:
+                        panel.log_system(f'패널 복원 완료 / 송신 준비 미완료: {exc} RUN 전에 TX 패킷 등록/연결이 필요합니다.', 'WARN')
                 for cfg in panel.widgets_config:
                     if cfg.get('widget_type') == 'sequence':
                         binding = cfg.get('binding', {})
@@ -377,13 +386,15 @@ class SessionManager(QObject):
             panel.main_window = m
             panel.db_messages = m.db_messages
             m.user_panel_window = panel
-            if data['panel'].get('visible', False):
+            if data['panel'].get('visible', False) or getattr(m, 'user_panel_only', False):
                 panel.show()
         for graph in prepared['graphs']:
             graph.main_window = m
             graph._bound_signals = m.resolve_graph_bindings(graph.signal_bindings)
             m.active_graphs.append(graph)
-            graph.show()
+            graph._panel_only_hidden = bool(getattr(m, 'user_panel_only', False))
+            if not getattr(m, 'user_panel_only', False):
+                graph.show()
         for bus in (1, 2, 3):
             self.apply_can(bus, data['can'][str(bus)])
         m.btn_open_log.setEnabled(any(m.db_messages.values()))

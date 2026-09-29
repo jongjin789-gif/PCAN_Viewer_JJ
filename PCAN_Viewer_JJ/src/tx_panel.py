@@ -1460,6 +1460,7 @@ class TxPanel(QWidget):
         try:
             path = self.get_pk_path()
             viewer_mode = False
+            panel_only = False
             
             # 기존 파일에서 viewer_mode_only 상태 유지
             if os.path.exists(path):
@@ -1467,11 +1468,13 @@ class TxPanel(QWidget):
                     with open(path, 'r', encoding='utf-8') as f:
                         old_data = json.load(f)
                         viewer_mode = old_data.get("viewer_mode_only", False)
+                        panel_only = old_data.get('user_panel_only', False)
                 except Exception:
                     pass
                     
             data_dict = {
                 "viewer_mode_only": viewer_mode,
+                "user_panel_only": panel_only,
                 "tx_packets": [], 
                 "db_files": {1: [], 2: [], 3: []}, 
                 "can_config": {}

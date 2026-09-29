@@ -26,6 +26,7 @@ def _collect_hidden_imports():
     """
     # 1. 필수 및 기본 모듈 추가
     hidden_imports = {
+        "PyQt5.QtSvg",
         "cantools",
         "can.interfaces",
     }

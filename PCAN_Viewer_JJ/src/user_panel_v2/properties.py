@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 from .config_dialog import WidgetConfigDialog
 from .binding import reconcile_binding, validate_config
 from .packets import validate_tool, bind_packet, find_packet
+from .commands import command_bindings
 
 
 class ToolProperties(QWidget):
@@ -17,7 +18,7 @@ class ToolProperties(QWidget):
         if cfg.get("widget_type") == "sequence":
             binding = cfg.get('binding', {})
             return {int(s["packet"]["bus"]) for s in binding.get("sequence_steps", []) + binding.get('sequence_failure_steps', []) if s.get("packet")}
-        return {int(cfg.get("binding", {}).get("bus", 1))} if cfg.get("behavior") in ("tx", "rx") else set()
+        return {int(b.get('bus', 1)) for b in command_bindings(cfg)} if cfg.get("behavior") in ("tx", "rx") else set()
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -203,7 +204,8 @@ class ToolProperties(QWidget):
                 if cfg.get("parent_id") and self.panel._is_descendant(cfg["parent_id"], cfg["id"]):
                     raise ValueError("A group cannot be placed inside its own child.")
                 self.panel._normalize_config(cfg)
-                reconcile_binding(self.panel.db_messages, cfg["binding"])
+                for binding in command_bindings(cfg):
+                    reconcile_binding(self.panel.db_messages, binding)
             for bus in buses if speed else []:
                 if getattr(self.panel.main_window, "buses", {}).get(bus) is not None:
                     raise ValueError(f"Disconnect CAN BUS {bus} before changing its speed.")
@@ -215,8 +217,20 @@ class ToolProperties(QWidget):
                     if index < 0 or (key == "data_bitrate" and rate and not combo.isEnabled()):
                         raise ValueError(f"CAN BUS {bus} does not support the selected {key}.")
                     plans.append((combo, index))
+            if plans:
+                if not self.panel._authorize_communication():
+                    return
+                self.panel.set_mode('standby')
+            if plans:
+                if not self.panel._authorize_communication():
+                    return
+                self.panel.set_mode('standby')
             for combo, index in plans:
                 combo.setCurrentIndex(index)
+            if plans:
+                self.panel.log_system(f'통신 속도 변경: BUS {sorted(buses)} / {speed}')
+            if plans:
+                self.panel.log_system(f'통신 속도 변경: BUS {sorted(buses)} / {speed}')
             for bus in buses if speed else []:
                 self.panel.channel_settings.setdefault(str(bus), {}).update(speed)
             for cfg in configs:

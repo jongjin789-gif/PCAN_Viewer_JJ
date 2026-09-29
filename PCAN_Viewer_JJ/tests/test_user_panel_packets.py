@@ -35,7 +35,7 @@ class PanelPacketTest(unittest.TestCase):
     def panel(self, packets, configs=(), db=None):
         self.sent = []
         main = SimpleNamespace(buses={1: SimpleNamespace(send=self.sent.append)},
-                               bus_capabilities={1: {'is_fd': True}}, record_tx_activity=lambda *args: None)
+                               bus_capabilities={1: {'is_fd': False}}, record_tx_activity=lambda *args: None)
         panel = UserPanelWindow(main, db or {})
         panel._load_panel_data(dict(tx_packets=copy.deepcopy(packets), widgets=copy.deepcopy(list(configs))))
         panel.show()
@@ -108,6 +108,40 @@ class PanelPacketTest(unittest.TestCase):
         runtime.send()
         self.assertEqual(self.sent[0].data[0], 3)
 
+    def test_registered_packet_checks_connection_type_at_each_send(self):
+        for packet_fd in (False, True):
+            p = packet(cycle=0)
+            p['is_fd'] = packet_fd
+            panel = self.panel([p])
+            runtime = PacketRuntime(p, {}, panel.main_window)
+            panel.main_window.bus_capabilities[1]['is_fd'] = not packet_fd
+            with self.assertRaisesRegex(ValueError, '타입 불일치'):
+                runtime.send()
+            self.assertEqual(self.sent, [])
+            self.assertEqual(runtime.alive, 0)
+            panel.main_window.bus_capabilities[1]['is_fd'] = packet_fd
+            runtime.send()
+            self.assertEqual(len(self.sent), 1)
+            self.assertEqual(self.sent[0].is_fd, packet_fd)
+            panel.main_window.buses[1] = None
+            with self.assertRaisesRegex(ValueError, '연결되지'):
+                runtime.send()
+            self.assertEqual(runtime.alive, 1)
+            panel.close()
+
+    def test_periodic_failure_stops_only_affected_packet(self):
+        p, q = packet(), packet('q', can_id=0x124)
+        q.update(bus=2, is_fd=True)
+        panel = self.panel([p, q])
+        panel.main_window.buses[2] = SimpleNamespace(send=self.sent.append)
+        panel.main_window.bus_capabilities[2] = {'is_fd': False}
+        panel.set_mode('run')
+        panel._flush_frame('q')
+        self.assertNotIn('q', panel._frame_timers)
+        self.assertIn('p', panel._frame_timers)
+        panel._flush_frame('p')
+        self.assertEqual([m.arbitration_id for m in self.sent], [p['id']])
+
     def test_registration_required_delay_and_tx_filter_rx_unchanged(self):
         dialog = RegisteredPacketDialog({})
         with self.assertRaises(ValueError):
@@ -148,7 +182,8 @@ class PanelPacketTest(unittest.TestCase):
         panel = self.panel([], [tool(packet())])
         with patch('src.user_panel_v2.window.QMessageBox.warning') as warning:
             panel.set_mode('run')
-            warning.assert_called_once()
+            warning.assert_not_called()
+        self.assertIn('RUN 시작 불가', panel.system_log.text.toPlainText())
         self.assertNotEqual(panel.mode, 'run')
         self.assertFalse(self.sent)
 

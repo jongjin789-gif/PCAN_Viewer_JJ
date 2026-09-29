@@ -2,13 +2,13 @@ from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QHBoxLayout
 
 
 class EditPasswordDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, purpose='EDIT'):
         super().__init__(parent)
-        self.setWindowTitle("Enter Edit Password")
+        self.setWindowTitle(f"{purpose} Password")
         self.resize(320, 120)
 
         root = QVBoxLayout(self)
-        root.addWidget(QLabel("Password is required to enter EDIT mode."))
+        root.addWidget(QLabel(f"{purpose} 비밀번호를 입력하세요."))
 
         self.edit_password = QLineEdit()
         self.edit_password.setEchoMode(QLineEdit.Password)
@@ -36,3 +36,8 @@ def verify_edit_password(parent, enabled, expected_password):
     if dlg.exec_() != QDialog.Accepted:
         return False
     return dlg.value() == (expected_password or "")
+
+
+def verify_communication_password(parent, expected_password):
+    dlg = EditPasswordDialog(parent, purpose='통신 / Force RUN')
+    return dlg.exec_() == QDialog.Accepted and dlg.value() == expected_password
