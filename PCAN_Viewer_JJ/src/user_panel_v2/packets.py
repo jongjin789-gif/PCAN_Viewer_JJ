@@ -2,9 +2,11 @@
 import copy
 import uuid
 import can
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QListWidget, QDialogButtonBox, QMessageBox, QComboBox, QSpinBox, QLabel, QCheckBox)
+                             QListWidget, QDialogButtonBox, QMessageBox, QComboBox, QSpinBox, QLabel, QCheckBox, QShortcut,
+                             QAbstractItemView, QTableView, QHeaderView)
 from src.tx_panel import TxPacketDialog
 from src.tx_counter import counter_payload
 from src.crc_utils import calculate_crc16_ccitt_false
@@ -14,6 +16,8 @@ from .masked_data import MaskedDataInput
 
 
 def validate_packet(packet, db_messages):
+    if type(packet.get('bus')) is not int or packet['bus'] not in (0, 1, 2, 3):
+        raise ValueError('BUS는 미선택 또는 1~3이어야 합니다.')
     n = packet['length']
     if n not in (list(range(9)) + ([12, 16, 20, 24, 32, 48, 64] if packet['is_fd'] else [])) or len(packet['data']) != n:
         raise ValueError('등록 패킷의 데이터 길이를 확인하세요.')
@@ -24,7 +28,7 @@ def validate_packet(packet, db_messages):
                 bitrate_switch=packet.get('is_brs', False), check=True)
     if packet.get('crc_type') == 'Hyundai_CRC' and (n < 3 or packet['id'] + 0xF800 > 65535):
         raise ValueError('Hyundai CRC는 3바이트 이상 및 호환 가능한 CAN ID가 필요합니다.')
-    if packet.get('signal_counters'):
+    if packet.get('signal_counters') and packet['bus']:
         msg = db_messages.get(packet['bus'], {}).get(packet['id'])
         if msg is None:
             raise ValueError('카운트/CRC 신호가 포함된 DBC/SYM을 불러오세요.')
@@ -100,6 +104,8 @@ def validate_command_data(data, length):
 
 
 def connected_packet_bus(main, packet):
+    if packet.get('bus') not in (1, 2, 3):
+        raise ValueError('CAN BUS 미선택 패킷은 송신하지 않습니다.')
     bus = getattr(main, 'buses', {}).get(packet['bus'])
     if bus is None:
         raise ValueError(f"CAN BUS {packet['bus']}가 연결되지 않았습니다.")
@@ -174,6 +180,7 @@ class RegisteredPacketDialog(TxPacketDialog):
         self.edit_cycle.setValue(-1)
         if packet:
             self.set_packet_data(packet)
+        self._preserve_packet_format = bool(packet)
 
     def get_packet_data(self):
         if self.edit_cycle.value() < 0:
@@ -277,6 +284,120 @@ class RegisteredCommandDialog(QDialog):
         super().accept()
 
 
+class PacketTableModel(QAbstractTableModel):
+    headers = ('BUS', '주소 (HEX)', '명칭', 'CAN 타입', 'BRS', 'DLC (bytes)', '주기', '노트')
+
+    def __init__(self, registry):
+        super().__init__(registry)
+        self.registry = registry
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.registry.packets)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.headers)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole:
+            return self.headers[section] if orientation == Qt.Horizontal else section + 1
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        p = self.registry.packets[index.row()]
+        if role == Qt.UserRole:
+            return p['packet_id']
+        if role == Qt.TextAlignmentRole:
+            return int(Qt.AlignVCenter | (Qt.AlignLeft if index.column() in (2, 7) else Qt.AlignHCenter))
+        if role in (Qt.DisplayRole, Qt.ToolTipRole):
+            return (str(p['bus']) if p['bus'] else '미선택', f"0x{p['id']:X}", p.get('symbol') or 'N/A',
+                    'FD' if p['is_fd'] else 'Classic', 'ON' if p.get('is_brs') else 'OFF',
+                    str(p['length']), f"{p['cycle']} ms" if p['cycle'] else '값 변경 시',
+                    p.get('note', ''))[index.column()]
+
+    def flags(self, index):
+        return (Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled
+                if index.isValid() else Qt.ItemIsDropEnabled)
+
+    def supportedDropActions(self):
+        return Qt.MoveAction
+
+    def moveRows(self, sourceParent, sourceRow, count, destinationParent, destinationChild):
+        packets = self.registry.packets
+        if (sourceParent.isValid() or destinationParent.isValid() or count != 1
+                or not 0 <= sourceRow < len(packets) or not 0 <= destinationChild <= len(packets)
+                or destinationChild in (sourceRow, sourceRow + 1)):
+            return False
+        if not self.beginMoveRows(sourceParent, sourceRow, sourceRow, destinationParent, destinationChild):
+            return False
+        packet = packets.pop(sourceRow)
+        packets.insert(destinationChild - (destinationChild > sourceRow), packet)
+        self.endMoveRows()
+        return True
+
+
+class PacketTableView(QTableView):
+    def selectedRows(self):
+        return sorted(index.row() for index in self.selectionModel().selectedRows())
+
+    def selectRows(self, rows):
+        self.clearSelection()
+        for row in rows:
+            self.selectionModel().select(self.model().index(row, 0),
+                                         QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        if rows:
+            self.selectionModel().setCurrentIndex(self.model().index(rows[-1], 0), QItemSelectionModel.NoUpdate)
+
+    def mousePressEvent(self, event):
+        # Dragging a new row extends selection; dragging an existing selection moves it.
+        index = self.indexAt(event.pos())
+        self.setDragEnabled(index.isValid() and index.row() in self.selectedRows()
+                            and not event.modifiers())
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.setDragEnabled(True)
+
+    def currentRow(self):
+        return self.currentIndex().row()
+
+    def setCurrentRow(self, row):
+        self.selectRows([row] if 0 <= row < self.model().rowCount() else [])
+
+    def dragMoveEvent(self, event):
+        if event.source() is self:
+            super().dragMoveEvent(event)
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if event.source() is not self:
+            event.ignore()
+            return
+        rows = self.selectedRows()
+        if not rows:
+            event.ignore()
+            return
+        target = self.indexAt(event.pos())
+        destination = (target.row() + (event.pos().y() > self.visualRect(target).center().y())
+                       if target.isValid() else self.model().rowCount())
+        model = self.model()
+        packets = model.registry.packets
+        selected = [packets[row] for row in rows]
+        selected_rows = set(rows)
+        remaining = [p for row, p in enumerate(packets) if row not in selected_rows]
+        destination -= sum(row < destination for row in rows)
+        model.beginResetModel()
+        model.registry.packets = remaining[:destination] + selected + remaining[destination:]
+        model.endResetModel()
+        self.selectRows(list(range(destination, destination + len(selected))))
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+
+
 class PacketRegistryDialog(QDialog):
     def __init__(self, panel):
         super().__init__(panel)
@@ -284,15 +405,39 @@ class PacketRegistryDialog(QDialog):
         self.panel = panel
         self.packets = copy.deepcopy(panel.tx_packets)
         self.setWindowTitle('유저 패널 TX 패킷')
-        self.resize(730, 420)
+        self.resize(1050, 480)
         layout = QVBoxLayout(self)
-        self.list = QListWidget()
+        self.list = PacketTableView()
+        self.list.setModel(PacketTableModel(self))
+        self.list.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.list.setAlternatingRowColors(True)
+        self.list.setWordWrap(False)
+        self.list.verticalHeader().setDefaultSectionSize(28)
+        self.list.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.list.horizontalHeader().setStretchLastSection(True)
+        for column, width in enumerate((65, 110, 210, 90, 65, 100, 110, 180)):
+            self.list.setColumnWidth(column, width)
+        self.list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.list.setDefaultDropAction(Qt.MoveAction)
+        self.list.setDragDropOverwriteMode(False)
+        self.list.setToolTip('드래그·Shift: 범위 선택 / Ctrl: 개별 선택 / 선택된 행 드래그: 순서 변경\n'
+                             'Ctrl+C: 선택 패킷 복사 / Ctrl+V: BUS 미선택으로 일괄 복제 (송신 안 함)')
+        self.copy_shortcut = QShortcut(QKeySequence.Copy, self.list)
+        self.paste_shortcut = QShortcut(QKeySequence.Paste, self.list)
+        for shortcut in (self.copy_shortcut, self.paste_shortcut):
+            shortcut.setContext(Qt.WidgetShortcut)
+        self.copy_shortcut.activated.connect(self.copy_packet)
+        self.paste_shortcut.activated.connect(self.paste_packet)
         layout.addWidget(self.list)
         actions = QHBoxLayout()
         for label, callback in [('패킷 등록', lambda: self.edit_packet(False)),
                                 ('선택 패킷 수정', lambda: self.edit_packet(True)),
                                 ('선택 패킷 삭제', self.remove_packet)]:
             button = QPushButton(label)
+            if label == '선택 패킷 수정':
+                self.edit_button = button
             button.clicked.connect(callback)
             actions.addWidget(button)
         layout.addLayout(actions)
@@ -300,27 +445,50 @@ class PacketRegistryDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-        self.list.itemDoubleClicked.connect(lambda _: self.edit_packet(True))
+        self.list.doubleClicked.connect(lambda _: self.edit_packet(True))
+        self.list.selectionModel().selectionChanged.connect(self._update_edit_button)
+        self.list.model().modelReset.connect(self._update_edit_button)
         self.refresh()
 
-    def refresh(self):
-        self.list.clear()
-        for p in self.packets:
-            cycle = f"{p['cycle']} ms" if p['cycle'] else '값 변경 시'
-            self.list.addItem(f"BUS {p['bus']} · 0x{p['id']:X} · {p.get('symbol', 'N/A')} · "
-                              f"{'FD' if p['is_fd'] else 'Classic'} · {p['length']} bytes · {cycle}")
+    def _update_edit_button(self, *_args):
+        self.edit_button.setEnabled(len(self.list.selectedRows()) == 1)
 
-    def edit_packet(self, editing):
-        row = self.list.currentRow()
-        if editing and row < 0:
+    def refresh(self):
+        self.list.model().beginResetModel()
+        self.list.model().endResetModel()
+
+    def copy_packet(self):
+        rows = self.list.selectedRows()
+        if rows:
+            self.panel._packet_clipboard = copy.deepcopy([self.packets[row] for row in rows])
+
+    def paste_packet(self):
+        clipboard = getattr(self.panel, '_packet_clipboard', None)
+        if not clipboard:
             return
+        packets = copy.deepcopy([clipboard] if isinstance(clipboard, dict) else clipboard)
+        start = len(self.packets)
+        for packet in packets:
+            packet.update(packet_id=str(uuid.uuid4()), bus=0, count=0)
+            self.packets.append(packet)
+        self.refresh()
+        self.list.selectRows(list(range(start, len(self.packets))))
+        self.list.scrollTo(self.list.currentIndex())
+
+    def edit_packet(self, editing, preset=None):
+        row = self.list.currentRow()
+        if editing:
+            rows = self.list.selectedRows()
+            if len(rows) != 1:
+                return
+            row = rows[0]
         old = self.packets[row] if editing else None
-        dlg = RegisteredPacketDialog(self.panel.db_messages, self, old)
+        dlg = RegisteredPacketDialog(self.panel.db_messages, self, old if editing else preset)
         if dlg.exec_() != QDialog.Accepted:
             return
         packet = dlg.get_packet_data()
         packet['packet_id'] = old['packet_id'] if old else str(uuid.uuid4())
-        if any(p['packet_id'] != packet['packet_id'] and (p['bus'], p['id']) == (packet['bus'], packet['id']) for p in self.packets):
+        if packet['bus'] and any(p['packet_id'] != packet['packet_id'] and (p['bus'], p['id']) == (packet['bus'], packet['id']) for p in self.packets):
             QMessageBox.warning(self, '패킷 등록', '같은 BUS와 CAN ID의 패킷이 이미 등록되어 있습니다.')
             return
         if editing:
@@ -328,6 +496,7 @@ class PacketRegistryDialog(QDialog):
         else:
             self.packets.append(packet)
         self.refresh()
+        self.list.setCurrentRow(row if editing else len(self.packets) - 1)
 
     def remove_packet(self):
         row = self.list.currentRow()

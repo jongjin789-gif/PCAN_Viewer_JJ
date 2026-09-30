@@ -48,26 +48,17 @@ class PanelOperationTest(unittest.TestCase):
         self.assertFalse(panel._frame_timers)
         self.assertIn('INIT 2단계', panel.system_log.text.toPlainText())
 
-    def test_init_receive_success_timeout_and_run_reentry(self):
+    def test_legacy_init_receive_is_preserved_but_blocks_normal_run(self):
         p = packet()
         steps = [dict(kind='CMD', packet=p), dict(kind='RCV', packet=p, mask=[255] * 8, timeout_ms=80)]
         panel = self.panel(steps)
         panel.set_mode('run')
-        QTest.qWait(30)
-        self.assertTrue(panel._init_running)
-        self.assertFalse(panel._frame_timers)
-        panel.on_sequence_receive(time.time(), 1, p['id'], p['data'], False, False)
-        QTest.qWait(15)
-        self.assertFalse(panel._init_running)
-        self.assertEqual(panel.mode, 'run')
-        self.assertIn('p', panel._frame_timers)
-        panel.set_mode('standard')
-        self.sent.clear()
-        panel.set_mode('run')
-        QTest.qWait(130)
         self.assertEqual(panel.mode, 'standby')
-        self.assertEqual(len(self.sent), 1)
-        self.assertIn('INIT 실패', panel.system_log.text.toPlainText())
+        self.assertFalse(panel._init_running)
+        self.assertFalse(panel._frame_timers)
+        self.assertFalse(self.sent)
+        self.assertEqual(panel.init_steps, steps)
+        self.assertIn('RCV', panel.system_log.text.toPlainText())
 
     def test_force_skips_cmd_rcv_del_and_applies_actions_in_order(self):
         p, q = packet(), packet('q', 2)

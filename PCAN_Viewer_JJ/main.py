@@ -88,10 +88,13 @@ if __name__ == '__main__':
         )
         if options['user_panel_only']:
             window.tx_panel.stop_all_timers()
-            window.open_user_panel()
+            panel_opened = (not getattr(window, '_panel_open_cancelled', False)
+                            and window.open_user_panel())
+            if not panel_opened:
+                window.close()
         else:
             window.show()
-        exit_code = app.exec_()
+        exit_code = app.exec_() if not options['user_panel_only'] or panel_opened else 0
     finally:
         # 프로그램 종료 시, 시스템 절전 방지 설정을 원래대로 복원
         if platform.system() == 'Windows':

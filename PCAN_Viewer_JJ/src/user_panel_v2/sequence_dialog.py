@@ -1,5 +1,5 @@
 import copy
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QEvent, QItemSelectionModel
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QComboBox, QLineEdit, QSpinBox, QLabel, QMessageBox, QCheckBox, QHeaderView)
 from src.tx_panel import TxPacketDialog
@@ -266,6 +266,10 @@ class SequenceDialog(QDialog):
         layout.addLayout(toolbar)
         hint = QLabel('CMD: 송신 · DEL: 대기 · START/STOP: 주기 시작/정지' + ('' if actions_only else ' · RCV: 수신 비교'))
         layout.addWidget(hint)
+        if actions_only and any(step.get('kind') == 'RCV' for step in self.steps):
+            notice = QLabel('기존 RCV 단계가 있습니다. 이 설정에서는 RCV를 사용할 수 없으므로 삭제하거나 종류를 변경하세요.')
+            notice.setWordWrap(True)
+            layout.addWidget(notice)
         self.btn_failure = QPushButton(f'실패 시 실행할 명령 설정 ({len(self.failure_steps)}단계)')
         self.btn_failure.clicked.connect(self.edit_failure_steps)
         self.btn_failure.setVisible(allow_failure and not actions_only)
@@ -274,6 +278,12 @@ class SequenceDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["종류", "생성 / 편집", "명령어 / 응답 이름", "명령어 뷰어"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setStyleSheet(
+            'QTableWidget::item:selected { background: palette(base); color: palette(text); }')
+        self.table.verticalHeader().setMinimumWidth(48)
+        self.table.verticalHeader().setHighlightSections(False)
+        self.table.horizontalHeader().setHighlightSections(False)
+        self.table.itemSelectionChanged.connect(self.update_selection)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         layout.addWidget(self.table)
         buttons = QHBoxLayout()
@@ -288,8 +298,16 @@ class SequenceDialog(QDialog):
         self.table.setRowCount(0)
         for row, step in enumerate(self.steps):
             self.table.insertRow(row)
+            self.table.setVerticalHeaderItem(row, QTableWidgetItem(str(row + 1)))
+            for col in range(4):
+                item = QTableWidgetItem()
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                self.table.setItem(row, col, item)
             combo = QComboBox()
             combo.addItems(['CMD', 'DEL', 'START', 'STOP'] if self.actions_only else ['CMD', 'RCV', 'DEL', 'START', 'STOP'])
+            if self.actions_only and step['kind'] == 'RCV':
+                combo.addItem('RCV')
+                combo.model().item(combo.count() - 1).setEnabled(False)
             combo.setCurrentText(step['kind'])
             combo.currentTextChanged.connect(lambda kind, r=row: self.change(r, kind))
             self.table.setCellWidget(row, 0, combo)
@@ -314,8 +332,38 @@ class SequenceDialog(QDialog):
                 viewer = QLineEdit(summary)
                 viewer.setReadOnly(True)
             self.table.setCellWidget(row, 3, viewer)
+            for widget in (combo, button, name, viewer):
+                widget.setProperty('sequenceRow', row)
+                widget.installEventFilter(self)
+            if self.actions_only and step['kind'] == 'RCV':
+                button.setEnabled(False)
+                viewer.setEnabled(False)
         if self.steps:
             self.table.selectRow(max(0, min(selected, len(self.steps)-1)))
+        self.update_selection()
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.MouseButtonPress, QEvent.FocusIn) and not getattr(self, '_selecting_row', False):
+            row = obj.property('sequenceRow')
+            if row is not None and 0 <= row < self.table.rowCount() and row != self.table.currentRow():
+                self._selecting_row = True
+                try:
+                    col = next((c for c in range(4) if self.table.cellWidget(row, c) is obj), 0)
+                    index = self.table.model().index(row, col)
+                    selection = self.table.selectionModel()
+                    selection.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+                    selection.select(index, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+                finally:
+                    self._selecting_row = False
+        return super().eventFilter(obj, event)
+
+    def update_selection(self):
+        rows = {index.row() for index in self.table.selectionModel().selectedRows()}
+        for row in range(self.table.rowCount()):
+            header = self.table.verticalHeaderItem(row)
+            if header is not None:
+                header.setText(f'▶ {row + 1}' if row in rows else str(row + 1))
+                header.setToolTip('선택된 단계' if row in rows else '')
 
     def add(self):
         row = self.table.currentRow()
@@ -365,6 +413,8 @@ class SequenceDialog(QDialog):
 
     def edit(self, row, bits=False):
         step = self.steps[row]
+        if self.actions_only and step['kind'] == 'RCV':
+            return
         if getattr(self, '_inline_editing', False):
             if step['kind'] == 'DEL':
                 from PyQt5.QtWidgets import QInputDialog

@@ -635,7 +635,8 @@ class UniversalCANMonitor(QMainWindow):
     def rename_user_panel(self):
         if self.viewer_only:
             return
-        self.open_user_panel()
+        if not self.open_user_panel():
+            return
         panel = self.user_panel_window
         title, accepted = QInputDialog.getText(self, '유저 패널 제목 변경', '창 제목:', text=panel.windowTitle())
         if accepted:
@@ -643,20 +644,64 @@ class UniversalCANMonitor(QMainWindow):
             panel.log_system(f'창 제목 변경: {panel.windowTitle()}')
             self.session.autosave()
 
+    def choose_panel_history(self):
+        box = QMessageBox(self.user_panel_window if self.user_panel_window.isVisible() else self)
+        box.setWindowTitle('유저 패널 DBC 확인')
+        box.setIcon(QMessageBox.Question)
+        box.setText('이전 패널의 DBC/SYM 내용 또는 BUS 배치가 현재 메인창과 다릅니다.')
+        box.setInformativeText('이전 패널을 현재 DBC로 사용할까요? 새 패널을 선택하면 이전 패널은 파일로 백업합니다.')
+        reuse = box.addButton('이전 패널 사용', QMessageBox.AcceptRole)
+        fresh = box.addButton('새 패널', QMessageBox.DestructiveRole)
+        cancel = box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(cancel)
+        box.exec_()
+        return 'reuse' if box.clickedButton() is reuse else 'new' if box.clickedButton() is fresh else 'cancel'
+
+    def archive_user_panel(self):
+        import json
+        from .session_storage import atomic_write
+        path = self.session.directory / 'panel_history' / f'panel_{time.time_ns()}.upp.json'
+        atomic_write(path, json.dumps(self.user_panel_window._panel_data(), ensure_ascii=False, indent=2).encode('utf-8'))
+        return path
+
     def open_user_panel(self):
+        self._panel_open_cancelled = False
         if self.viewer_only:
             QMessageBox.information(self, "Info", "User panel is disabled in viewer-only mode.")
             return
 
         try:
             if self.user_panel_window is not None:
+                from .user_panel_v2.dbc_identity import database_signature
+                current = database_signature(self)
+                panel = self.user_panel_window
+                if panel.dbc_signature != current:
+                    choice = self.choose_panel_history()
+                    if choice == 'cancel':
+                        self._panel_open_cancelled = True
+                        return False
+                    panel.set_mode('standby')
+                    if choice == 'new':
+                        try:
+                            backup = self.archive_user_panel()
+                        except OSError as exc:
+                            QMessageBox.warning(panel, '패널 백업 실패', str(exc))
+                            self._panel_open_cancelled = True
+                            return False
+                        panel._load_panel_data({'dbc_signature': current})
+                        panel.set_mode('standby')
+                        panel.log_system(f'새 패널 시작 / 이전 패널 백업: {backup}')
+                    else:
+                        panel.dbc_signature = current
+                        panel.log_system('DBC 변경 확인: 이전 패널을 현재 DBC/SYM으로 사용합니다.', 'WARN')
                 self.user_panel_window.refresh_dbc_bindings()
                 if not self.user_panel_window.isVisible():
                     self.user_panel_window.set_mode('standby')
                 self.user_panel_window.show()
                 self.user_panel_window.raise_()
                 self.user_panel_window.activateWindow()
-                return
+                self.session.autosave()
+                return True
         except RuntimeError:
             self.user_panel_window = None
 
@@ -671,6 +716,7 @@ class UniversalCANMonitor(QMainWindow):
             self.user_panel_window.log_system(message, level)
         self._pending_panel_events.clear()
         self.user_panel_window.show()
+        return True
 
     def get_db_file_paths_by_bus(self):
         result = {1: [], 2: [], 3: []}

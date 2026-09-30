@@ -172,8 +172,8 @@ class SessionManager(QObject):
                     issues.append(f'BUS {bus} / {entry["name"]}: {exc}')
         for i, packet in enumerate(data['tx_packets']):
             try:
-                if packet['bus'] not in (1, 2, 3):
-                    raise ValueError('BUS는 1~3이어야 합니다.')
+                if packet['bus'] not in (0, 1, 2, 3):
+                    raise ValueError('BUS는 미선택 또는 1~3이어야 합니다.')
                 if not isinstance(packet.get('symbol'), str) or not isinstance(packet.get('note'), str):
                     raise ValueError('심볼과 메모는 문자열이어야 합니다.')
                 validate_packet(packet, prepared['messages'])
@@ -197,12 +197,17 @@ class SessionManager(QObject):
             try:
                 validate_panel(data['panel']['data'])
                 # No connected hardware or callbacks during validation/construction.
+                from .user_panel_v2.dbc_identity import database_token
+                db_signature = {str(bus): [database_token(entry['name'], raw)
+                    for entry, raw, db in prepared['databases'][bus]] for bus in (1, 2, 3)}
                 proxy = SimpleNamespace(buses={1: None, 2: None, 3: None},
-                                        db_messages=prepared['messages'])
+                                        db_messages=prepared['messages'], database_content_signature=db_signature)
                 panel = UserPanelWindow(proxy, prepared['messages'],
                                         security_config=self.main.user_panel_security)
                 prepared['panel'] = panel
                 panel._load_panel_data(copy.deepcopy(data['panel']['data']))
+                if panel.dbc_signature is None:
+                    panel.dbc_signature = db_signature
                 if strict:
                     # Restore editable, unfinished tools without allowing transmission.
                     # Packet corruption still rejects the file before readiness checks.
@@ -339,7 +344,7 @@ class SessionManager(QObject):
         if desired is None and cfg['is_open']:
             errors.append('장치 정보가 없습니다')
         fd = cfg['data_bitrate'] not in ('Off', 'N/A', '')
-        if fd and (index < 0 or not (combo.currentData() or {}).get('is_fd', False)):
+        if fd and index >= 0 and not (combo.currentData() or {}).get('is_fd', False):
             errors.append('장치가 CAN FD를 지원하지 않습니다')
         for widget, value in ((m.combo_bitrate[bus], cfg['bitrate']),
                               (m.combo_fd_iso[bus], cfg['fd_iso']),
@@ -348,7 +353,8 @@ class SessionManager(QObject):
             if i < 0 and value in ('Off', 'N/A'):
                 i = widget.findText('Off' if value == 'N/A' else 'N/A')
             if i < 0:
-                errors.append(f'지원하지 않는 설정: {value}')
+                if index >= 0:
+                    errors.append(f'지원하지 않는 설정: {value}')
                 widget.addItem(value, None)
                 widget.setCurrentIndex(widget.count() - 1)
             else:
@@ -387,7 +393,7 @@ class SessionManager(QObject):
             panel.db_messages = m.db_messages
             m.user_panel_window = panel
             if data['panel'].get('visible', False) or getattr(m, 'user_panel_only', False):
-                panel.show()
+                m.open_user_panel()
         for graph in prepared['graphs']:
             graph.main_window = m
             graph._bound_signals = m.resolve_graph_bindings(graph.signal_bindings)

@@ -32,7 +32,10 @@ class TxPacketDialog(QDialog):
     def bus_is_fd(self):
         panel = self.parent()
         owner = getattr(panel, "main_window", panel)
-        return getattr(owner, "bus_capabilities", {}).get(int(self.combo_bus.currentText()), {}).get("is_fd", False)
+        return getattr(owner, "bus_capabilities", {}).get(self.selected_bus(), {}).get("is_fd", False)
+
+    def selected_bus(self):
+        return int(self.combo_bus.currentText()) if self.combo_bus.currentText().isdigit() else 0
 
     def fit_signal_name_column(self):
         if getattr(self, '_fitting_signal_column', False):
@@ -169,6 +172,7 @@ class TxPacketDialog(QDialog):
         # 1. CAN BUS
         self.combo_bus = QComboBox()
         self.combo_bus.addItems(["1", "2", "3"])
+        self.combo_bus.addItem('미선택', 0)
         self.combo_bus.currentIndexChanged.connect(self.on_bus_changed)
         form_layout.addRow("CAN BUS:", self.combo_bus)
         
@@ -314,9 +318,32 @@ class TxPacketDialog(QDialog):
         self.update_data_range_label()
 
     def on_bus_changed(self):
+        if self._updating:
+            return
+        if not getattr(self, '_preserve_packet_format', False):
+            return self._refresh_bus_fields()
+        frame_type = self.combo_type.currentText()
+        brs = self.check_brs.isChecked()
+        length = self.combo_length.currentText()
+        payload = self.edit_data.text()
+        self._refresh_bus_fields()
+        self._updating = True
+        self.combo_type.setCurrentText(frame_type)
+        self._updating = False
+        self.on_type_changed()
+        self._updating = True
+        self.check_brs.setChecked(brs)
+        self.combo_length.setCurrentText(length)
+        self.edit_data.setText(payload)
+        self._last_data_text_len = len(payload)
+        self._updating = False
+        self.on_data_edited()
+        self.update_data_range_label()
+
+    def _refresh_bus_fields(self):
         if self._updating: return
         self._updating = True
-        bus_num = int(self.combo_bus.currentText())
+        bus_num = self.selected_bus()
         self.combo_symbol.clear()
         self.combo_symbol.addItem("Direct Input (N/A)", None)
         
@@ -338,7 +365,7 @@ class TxPacketDialog(QDialog):
         if can_id is not None:
             self._updating = True
             self.edit_id.setText(f"{can_id:X}")
-            bus_num = int(self.combo_bus.currentText())
+            bus_num = self.selected_bus()
             self.current_db_msg = self.db_messages[bus_num][can_id]
             
             # DBC 메시지에 맞게 Length와 Type 조정
@@ -420,7 +447,7 @@ class TxPacketDialog(QDialog):
             self.table_signals.setRowCount(0)
             return
             
-        bus_num = int(self.combo_bus.currentText())
+        bus_num = self.selected_bus()
         if bus_num in self.db_messages and can_id in self.db_messages[bus_num]:
             idx = self.combo_symbol.findData(can_id)
             if idx >= 0:
@@ -654,7 +681,7 @@ class TxPacketDialog(QDialog):
         self._updating = False
 
     def get_packet_data(self):
-        bus_num = int(self.combo_bus.currentText())
+        bus_num = self.selected_bus()
         can_id_text = self.edit_id.text().strip()
         can_id = int(can_id_text, 16) if can_id_text else 0
         is_fd = (self.combo_type.currentText() == "FD")
@@ -686,10 +713,11 @@ class TxPacketDialog(QDialog):
         }
 
     def set_packet_data(self, data):
+        self._preserve_packet_format = True
         self._updating = True
         
         # 1. CAN BUS 설정
-        idx = self.combo_bus.findText(str(data["bus"]))
+        idx = self.combo_bus.findText(str(data["bus"]) if data['bus'] else '미선택')
         if idx >= 0: self.combo_bus.setCurrentIndex(idx)
         
         # 1.5 CRC 설정
@@ -805,7 +833,7 @@ class TxPacketItem(SortableTreeWidgetItem):
         
     def update_ui(self):
         d = self.packet_data
-        self.setText(0, str(d["bus"]))
+        self.setText(0, str(d["bus"]) if d['bus'] else '미선택 (송신 안 함)')
         can_id_str = f"{d['id']:03X}h" if d['id'] <= 0x7FF else f"{d['id']:X}h"
         self.setText(1, can_id_str)
         self.setText(2, "FD" if d["is_fd"] else "Classic")
@@ -819,6 +847,9 @@ class TxPacketItem(SortableTreeWidgetItem):
         self.setText(10, d["note"])
         
     def send_packet(self):
+        if self.packet_data.get('bus') not in (1, 2, 3):
+            self.stop_timer()
+            return
         bus_obj = self.tx_panel.buses.get(self.packet_data["bus"])
         if bus_obj:
             d = self.packet_data
@@ -899,6 +930,9 @@ class TxPacketItem(SortableTreeWidgetItem):
                 self.tx_panel._update_action_button(self)
 
     def start_timer(self):
+        if self.packet_data.get('bus') not in (1, 2, 3):
+            self.stop_timer()
+            return
         cycle = self.packet_data["cycle"]
         if cycle > 0:
             self.is_running = True
@@ -1044,6 +1078,7 @@ class TxPanel(QWidget):
             for data in packets:
                 if "bus" in data and "id" in data and "data" in data:
                     data["count"] = 0 # 붙여넣기 시 전송 카운트 초기화
+                    data['bus'] = 0
                     self.add_packet_to_tree(data)
             self.auto_save_packets()
         except Exception: pass
@@ -1271,7 +1306,7 @@ class TxPanel(QWidget):
         is_connected = self.buses.get(bus_num) is not None
         
         # 호환성 검사: 채널이 FD를 지원하지 않는데 패킷 길이가 8을 초과하는 경우
-        bus_is_fd = self.main_window.bus_capabilities[bus_num].get('is_fd', False)
+        bus_is_fd = self.main_window.bus_capabilities.get(bus_num, {}).get('is_fd', False)
         is_incompatible = item.packet_data.get('length', 0) > 8
         
         if not is_connected or (is_incompatible and not bus_is_fd):

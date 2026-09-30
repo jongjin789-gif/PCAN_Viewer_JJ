@@ -45,6 +45,7 @@ from .config_dialog import WidgetConfigDialog
 from .sequence import SequenceControl, validate_steps
 from .mode_security import verify_edit_password, verify_communication_password
 from .system_log import SystemLog
+from .dbc_identity import database_signature
 from src.utils import get_resource_path
 from .storage import PACKAGE_EXT, load_bundle, load_panel_json, save_bundle, save_panel_json
 from .styles import TOOL_STYLE, lamp_style
@@ -100,6 +101,7 @@ class UserPanelWindow(QWidget):
         self.main_window = main_window
         self.db_messages = db_messages
         self.security_config = security_config or {}
+        self.dbc_signature = database_signature(main_window)
 
         self.setWindowTitle("User Panel")
         self.setWindowIcon(QIcon(get_resource_path('icon/user_panel.svg')))
@@ -242,6 +244,15 @@ class UserPanelWindow(QWidget):
         controls.addWidget(self.btn_add_tx)
         controls.addWidget(self.btn_add_rx)
         controls.addWidget(self.btn_add_misc)
+        add_separator()
+        self.clear_buttons = {}
+        for key, text, icon in [('packets', '패킷 클리어', 'clear_packets'),
+                                ('tools', '도구 클리어', 'clear_tools'),
+                                ('all', '전체 클리어', 'clear_all')]:
+            button = tool_button(text, icon)
+            button.clicked.connect(lambda checked=False, scope=key: self.clear_panel(scope))
+            self.clear_buttons[key] = button
+            controls.addWidget(button)
         controls.addStretch()
         root.addLayout(controls)
         for button in (self.btn_mode_edit, self.btn_mode_standby, self.btn_mode_run, self.btn_force_run):
@@ -302,36 +313,36 @@ class UserPanelWindow(QWidget):
 
         geom_box.hide()  # Geometry is edited in the right-hand property inspector.
 
-        sim_box = QGroupBox("RX Simulator (No CAN)")
+        sim_box = QWidget()
+        self.display_test_tab = sim_box
         sim_layout = QVBoxLayout(sim_box)
         sim_row = QHBoxLayout()
         self.spin_sim_value = QDoubleSpinBox()
         self.spin_sim_value.setDecimals(3)
         self.spin_sim_value.setRange(-1000000.0, 1000000.0)
         self.spin_sim_value.setValue(1.0)
-        self.spin_sim_value.setToolTip("Manual RX simulator value. Displays up to 3 decimals; integers are shown without trailing .000.")
-        self.btn_sim_selected = QPushButton("Apply Selected RX")
-        self.btn_sim_all = QPushButton("Apply All RX")
-        self.btn_sim_auto = QPushButton("Auto Sim: OFF")
+        self.spin_sim_value.setToolTip("수신 도구에 표시할 시험값입니다. 소수점 셋째 자리까지 입력할 수 있습니다.")
+        self.btn_sim_selected = QPushButton("선택 RX 적용")
+        self.btn_sim_auto = QPushButton("자동 표시 테스트: OFF")
         self.btn_sim_auto.setCheckable(True)
         self.label_sim_help = QLabel(
-            "Value is the manual RX simulator input. Apply Selected / Apply All updates RX tools without CAN; Auto Sim uses the same value range while running."
+            "CAN 통신 없이 수신 도구의 표시를 시험합니다. 선택 RX 적용은 현재 선택 도구 1개에 "
+            "시험값을 적용합니다. 자동 테스트는 모든 RX 도구의 "
+            "설정된 최소·최대 범위에서 값을 변화시킵니다. 실제 수신 및 DBC 해석은 검증하지 않습니다."
         )
         self.label_sim_help.setWordWrap(True)
         self.label_sim_help.setStyleSheet("color:#555;")
 
         self.btn_sim_selected.clicked.connect(self.simulate_selected_rx)
-        self.btn_sim_all.clicked.connect(self.simulate_all_rx)
         self.btn_sim_auto.toggled.connect(self._toggle_auto_sim)
 
-        sim_row.addWidget(QLabel("Value"))
+        sim_row.addWidget(QLabel("시험값"))
         sim_row.addWidget(self.spin_sim_value)
         sim_layout.addLayout(sim_row)
         sim_layout.addWidget(self.label_sim_help)
         sim_layout.addWidget(self.btn_sim_selected)
-        sim_layout.addWidget(self.btn_sim_all)
         sim_layout.addWidget(self.btn_sim_auto)
-        left_lay.addWidget(sim_box)
+        sim_layout.addStretch()
 
         right = QWidget()
         right_lay = QVBoxLayout(right)
@@ -373,7 +384,12 @@ class UserPanelWindow(QWidget):
         split.addWidget(left)
         split.addWidget(right)
         self.properties = ToolProperties(self)
-        split.addWidget(self.properties)
+        self.inspector_tabs = QTabWidget()
+        self.inspector_tabs.addTab(self.properties, "속성")
+        self.display_test_tab.setParent(self.inspector_tabs)
+        self.display_test_tab.hide()
+        self.inspector_tabs.tabBar().hide()
+        split.addWidget(self.inspector_tabs)
         split.setStretchFactor(1, 1)
         split.setSizes([210, 630, 340])
 
@@ -400,6 +416,44 @@ class UserPanelWindow(QWidget):
         outer.addWidget(self.status_bar)
 
         self._sync_geom_editor_from_selection()
+
+    def clear_panel(self, scope):
+        if self.mode != 'edit' or scope not in ('packets', 'tools', 'all'):
+            return
+        descriptions = {
+            'packets': '등록 TX 패킷, INIT, 시퀀스 도구의 실행/실패 처리 명령을 비웁니다. 도구 배치는 유지합니다.',
+            'tools': '모든 페이지의 도구를 비웁니다. 등록 TX 패킷과 INIT은 유지합니다.',
+            'all': '패널의 모든 도구, 등록 TX 패킷, INIT 및 페이지를 초기화합니다.',
+        }
+        if QMessageBox.question(self, '패널 클리어', descriptions[scope] + '\nDBC와 버스 연결은 유지됩니다. 진행할까요?',
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.stop_panel_commands('패널 클리어')
+        self._packet_runtimes.clear()
+        if scope in ('packets', 'all'):
+            self.tx_packets.clear()
+            self.init_steps.clear()
+            self.init_control.hide()
+            for cfg in self.widgets_config:
+                for binding in command_bindings(cfg):
+                    binding.pop('packet_id', None)
+                if cfg.get('widget_type') == 'sequence':
+                    cfg['binding']['sequence_steps'] = []
+                    cfg['binding']['sequence_failure_steps'] = []
+        if scope in ('tools', 'all'):
+            self.widgets_config.clear()
+            self.selected_widget_id = None
+            self.selected_widget_ids.clear()
+        if scope == 'all':
+            self.pages = [dict(id='default', name='페이지 1')]
+            self.active_page_id = 'default'
+            self._sync_page_tabs()
+            self._tool_clipboard.clear()
+        self.rebuild_grid()
+        self.log_system(f'클리어 완료: {scope}')
+        session = getattr(self.main_window, 'session', None)
+        if session:
+            session.autosave()
 
     def _sync_toolbar_modes(self):
         for button, active in ((self.btn_mode_edit, self.mode == 'edit'),
@@ -451,6 +505,8 @@ class UserPanelWindow(QWidget):
         dialog = ConnectionDialog(self)
         dialog.exec_()
         dialog.deleteLater()
+        if self.dbc_signature != database_signature(self.main_window):
+            self.main_window.open_user_panel()
 
     def force_run(self):
         if self._authorize_communication():
@@ -462,7 +518,8 @@ class UserPanelWindow(QWidget):
             if step['kind'] in ('CMD', 'RCV'):
                 packets = [step['packet']]
             elif step['kind'] == 'START':
-                packets = [p for p in self.tx_packets if step['target_packet_id'] in ('*', p['packet_id'])]
+                packets = [p for p in self.tx_packets if step['target_packet_id'] in ('*', p['packet_id'])
+                           and (p['bus'] or step['target_packet_id'] != '*')]
             for packet in packets:
                 try:
                     connected_packet_bus(self.main_window, packet)
@@ -484,7 +541,6 @@ class UserPanelWindow(QWidget):
         menu_arrange = self.menu_bar.addMenu("Arrange")
         menu_tools = self.menu_bar.addMenu("Tools")
         menu_diag = self.menu_bar.addMenu("Diagnostics")
-        menu_sim = self.menu_bar.addMenu("RX Simulator")
 
         self.act_save_panel = QAction("Save Panel", self)
         self.act_load_panel = QAction("Load Panel", self)
@@ -543,18 +599,14 @@ class UserPanelWindow(QWidget):
         menu_diag.addAction(self.act_check_overlap)
         menu_diag.addAction(self.act_focus_conflict)
 
-        self.act_sim_selected = QAction("Apply Selected RX", self)
-        self.act_sim_all = QAction("Apply All RX", self)
-        self.act_sim_auto = QAction("Auto Sim", self)
+        self.act_sim_selected = QAction("선택 RX 적용", self)
+        self.act_sim_auto = QAction("자동 표시 테스트", self)
         self.act_sim_auto.setCheckable(True)
         self.act_sim_selected.triggered.connect(self.simulate_selected_rx)
-        self.act_sim_all.triggered.connect(self.simulate_all_rx)
         self.act_sim_auto.toggled.connect(self._toggle_auto_sim)
-        menu_sim.addAction(self.act_sim_selected)
-        menu_sim.addAction(self.act_sim_all)
-        menu_sim.addAction(self.act_sim_auto)
 
         self._edit_mode_actions = [
+            *self.clear_buttons.values(),
             self.btn_add_tx,
             self.btn_add_rx,
             self.btn_add_misc,
@@ -572,6 +624,12 @@ class UserPanelWindow(QWidget):
             self.act_check_overlap,
             self.act_focus_conflict,
         ]
+        menu_clear = self.menu_bar.addMenu('클리어')
+        for key, button in self.clear_buttons.items():
+            action = QAction(button.icon(), button.text(), self)
+            action.triggered.connect(lambda checked=False, scope=key: self.clear_panel(scope))
+            menu_clear.addAction(action)
+            self._edit_mode_actions.append(action)
 
     def _setup_shortcuts(self):
         self._shortcuts = []
@@ -754,7 +812,7 @@ class UserPanelWindow(QWidget):
             return
         from .sequence_dialog import SequenceDialog
         dialog = SequenceDialog(self.db_messages, self.init_steps, self, self.tx_packets,
-                                actions_only=False, allow_empty=True, allow_failure=False)
+                                actions_only=True, allow_empty=True, allow_failure=False)
         dialog.setWindowTitle('RUN Init 시퀀스 (비우면 사용 안함)')
         if dialog.exec_() == dialog.Accepted:
             self.init_steps = copy.deepcopy(dialog.steps)
@@ -820,7 +878,7 @@ class UserPanelWindow(QWidget):
         for p in self.tx_packets:
             validate_packet(p, self.db_messages)
             key = (p['bus'], p['id'])
-            if key in keys or not 0 <= int(p.get('cycle', -1)) <= 600000:
+            if (p['bus'] and key in keys) or not 0 <= int(p.get('cycle', -1)) <= 600000:
                 raise ValueError('등록 패킷의 BUS/ID 중복 또는 딜레이 설정을 확인하세요.')
             keys.add(key)
             previous = self._packet_runtimes.get(p['packet_id'])
@@ -879,6 +937,8 @@ class UserPanelWindow(QWidget):
         self.stop_panel_commands("모드 변경")
         if new_mode == 'run':
             try:
+                if not force:
+                    validate_steps(self.init_steps, actions_only=True, allow_empty=True)
                 self._prepare_registered_packets(force=force)
                 if not force:
                     self._check_init_connections()
@@ -964,11 +1024,11 @@ class UserPanelWindow(QWidget):
 
         if self.mode != "run":
             self._stop_all_frame_timers()
-        if self.mode == "edit" and self._sim_timer.isActive():
+        if self.mode != "edit" and self._sim_timer.isActive():
             self._sim_timer.stop()
             self.btn_sim_auto.blockSignals(True)
             self.btn_sim_auto.setChecked(False)
-            self.btn_sim_auto.setText("Auto Sim: OFF")
+            self.btn_sim_auto.setText("자동 표시 테스트: OFF")
             self.btn_sim_auto.blockSignals(False)
             self.act_sim_auto.blockSignals(True)
             self.act_sim_auto.setChecked(False)
@@ -1028,7 +1088,7 @@ class UserPanelWindow(QWidget):
         if self._history_suspended:
             return
         current = self._history_snapshot()
-        if self._history_current is not None and any(current[key] != self._history_current.get(key) for key in ('widgets', 'pages')):
+        if self._history_current is not None and any(current[key] != self._history_current.get(key) for key in ('widgets', 'pages', 'tx_packets', 'init_steps')):
             self._undo_stack.append(self._history_current)
             del self._undo_stack[:-self.HISTORY_LIMIT]
             self._redo_stack.clear()
@@ -1050,6 +1110,7 @@ class UserPanelWindow(QWidget):
             self._sync_page_tabs()
             self.tx_packets = copy.deepcopy(state.get('tx_packets', []))
             self.init_steps = copy.deepcopy(state.get('init_steps', []))
+            self._packet_runtimes.clear()
             for cfg in self.widgets_config:
                 for binding in command_bindings(cfg):
                     reconcile_binding(self.db_messages, binding)
@@ -1226,10 +1287,16 @@ class UserPanelWindow(QWidget):
         if self.mode != "edit":
             return
         self.properties.refresh(force=True)
+        self.inspector_tabs.setCurrentWidget(self.properties)
         self.properties.show()
         self.properties.setFocus()
 
     def refresh_dbc_bindings(self):
+        if self.dbc_signature != database_signature(self.main_window):
+            if self.mode == 'run':
+                self.set_mode('standby')
+            self.log_system('DBC/SYM 변경 감지: 패널을 다시 열 때 기존 이력 사용 여부를 확인합니다.', 'WARN')
+            return
         for cfg in self.widgets_config:
             for binding in command_bindings(cfg):
                 reconcile_binding(self.db_messages, binding)
@@ -1869,6 +1936,7 @@ class UserPanelWindow(QWidget):
         self._sync_geom_editor_from_selection()
         if hasattr(self, "properties"):
             self.properties.refresh()
+        self._refresh_display_test_tab()
         if self._history_current is not None and self._history_current["widgets"] == self.widgets_config:
             self._history_current["selected"] = self.selected_widget_id
             self._history_current["ids"] = set(self.selected_widget_ids)
@@ -2405,6 +2473,8 @@ class UserPanelWindow(QWidget):
             return
         for packet in self.tx_packets:
             key = packet['packet_id']
+            if not packet['bus']:
+                continue
             if packet['cycle'] <= 0 or key in self._paused_packets or key in self._frame_timers:
                 continue
             timer = QTimer(self)
@@ -2613,6 +2683,26 @@ class UserPanelWindow(QWidget):
     def _rx_widgets(self):
         return [cfg for cfg in self.widgets_config if cfg.get("behavior") == "rx"]
 
+    def _can_display_test(self):
+        cfg = self._get_selected_config()
+        return self.mode == 'edit' and bool(cfg and cfg.get('behavior') == 'rx')
+
+    def _refresh_display_test_tab(self):
+        if not hasattr(self, 'inspector_tabs'):
+            return
+        enabled = self._can_display_test()
+        index = self.inspector_tabs.indexOf(self.display_test_tab)
+        if enabled and index < 0:
+            self.inspector_tabs.addTab(self.display_test_tab, '표시 테스트')
+        elif not enabled:
+            self._toggle_auto_sim(False)
+            if index >= 0:
+                self.inspector_tabs.removeTab(index)
+                self.display_test_tab.hide()
+        self.inspector_tabs.tabBar().setVisible(enabled)
+        for action in (self.act_sim_selected, self.act_sim_auto):
+            action.setEnabled(enabled)
+
     def _simulate_apply_to_cfg(self, cfg, value):
         try:
             v = float(value)
@@ -2621,44 +2711,35 @@ class UserPanelWindow(QWidget):
         self._update_widget_value(cfg, v, force=True)
 
     def simulate_selected_rx(self):
+        if not self._can_display_test():
+            return
         cfg = self._get_selected_config()
         if not cfg or cfg.get("behavior") != "rx":
-            QMessageBox.information(self, "RX Simulator", "Select an RX tool first.")
+            QMessageBox.information(self, "표시 테스트", "수신 도구를 먼저 선택하세요.")
             return
         self._simulate_apply_to_cfg(cfg, self.spin_sim_value.value())
 
-    def simulate_all_rx(self):
-        rx_items = self._rx_widgets()
-        if not rx_items:
-            QMessageBox.information(self, "RX Simulator", "No RX tools available.")
-            return
-        value = float(self.spin_sim_value.value())
-        for cfg in rx_items:
-            self._simulate_apply_to_cfg(cfg, value)
-
     def _toggle_auto_sim(self, checked):
+        checked = bool(checked and self._can_display_test())
+        self.btn_sim_auto.blockSignals(True)
+        self.btn_sim_auto.setChecked(checked)
+        self.btn_sim_auto.blockSignals(False)
         self.act_sim_auto.blockSignals(True)
         self.act_sim_auto.setChecked(bool(checked))
         self.act_sim_auto.blockSignals(False)
 
         if checked:
-            if self.mode == "edit":
-                QMessageBox.information(self, "RX Simulator", "Switch to STANDBY or RUN mode to start auto simulation.")
-                self.btn_sim_auto.blockSignals(True)
-                self.btn_sim_auto.setChecked(False)
-                self.btn_sim_auto.blockSignals(False)
-                self.act_sim_auto.blockSignals(True)
-                self.act_sim_auto.setChecked(False)
-                self.act_sim_auto.blockSignals(False)
-                return
             self._sim_phase = 0.0
             self._sim_timer.start()
-            self.btn_sim_auto.setText("Auto Sim: ON")
+            self.btn_sim_auto.setText("자동 표시 테스트: ON")
         else:
             self._sim_timer.stop()
-            self.btn_sim_auto.setText("Auto Sim: OFF")
+            self.btn_sim_auto.setText("자동 표시 테스트: OFF")
 
     def _on_sim_timer(self):
+        if not self._can_display_test():
+            self._toggle_auto_sim(False)
+            return
         rx_items = self._rx_widgets()
         if not rx_items:
             return
@@ -2680,6 +2761,7 @@ class UserPanelWindow(QWidget):
         return {
             "version": 5,
             "title": self.windowTitle(),
+            "dbc_signature": copy.deepcopy(self.dbc_signature),
             "pages": copy.deepcopy(self.pages),
             "active_page_id": self.active_page_id,
             "tx_packets": copy.deepcopy(self.tx_packets),
@@ -2721,6 +2803,7 @@ class UserPanelWindow(QWidget):
         if not isinstance(data, dict):
             raise ValueError("Invalid panel file")
         self.setWindowTitle(str(data.get('title') or 'User Panel'))
+        self.dbc_signature = copy.deepcopy(data.get('dbc_signature', database_signature(self.main_window)))
 
         self.stop_panel_commands('패널 불러오기')
         self._packet_runtimes.clear()
@@ -2752,7 +2835,8 @@ class UserPanelWindow(QWidget):
                     packet = find_packet(self.tx_packets, binding)
                     if packet:
                         bind_packet(binding, packet)
-                reconcile_binding(self.db_messages, binding)
+                if self.dbc_signature == database_signature(self.main_window):
+                    reconcile_binding(self.db_messages, binding)
         self.selected_widget_id = next((c['id'] for c in self.widgets_config if self._page_for(c) == self.active_page_id), None)
 
         shape_count = sum(1 for c in self.widgets_config if str(c.get("widget_type", "")).startswith("shape_"))

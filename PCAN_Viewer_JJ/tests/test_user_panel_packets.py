@@ -4,10 +4,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtTest import QTest
+from PyQt5.QtCore import QModelIndex, Qt, QPoint, QPointF, QEvent
+from PyQt5.QtGui import QMouseEvent
 from cantools.database.can import Message, Signal
-from src.user_panel_v2.packets import PacketRuntime, RegisteredPacketDialog, bind_packet
+from src.user_panel_v2.packets import PacketRuntime, RegisteredPacketDialog, PacketRegistryDialog, bind_packet
 from src.user_panel_v2.window import UserPanelWindow
 from src.user_panel_v2.config_dialog import WidgetConfigDialog
 from src.crc_utils import calculate_crc16_ccitt_false
@@ -28,6 +30,154 @@ def tool(p, ident='tool', start=24, kind='slider'):
 
 
 class PanelPacketTest(unittest.TestCase):
+    def test_registry_ctrl_shift_drag_selection_and_multi_paste(self):
+        panel = self.panel([packet(str(i), 0x120 + i) for i in range(5)])
+        registry = PacketRegistryDialog(panel)
+        self.addCleanup(registry.close)
+        registry.show()
+        registry.activateWindow()
+        registry.list.setFocus()
+        self.app.processEvents()
+        view = registry.list
+        def point(row):
+            return view.visualRect(view.model().index(row, 1)).center()
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, point(0))
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.ControlModifier, point(2))
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.ControlModifier, point(4))
+        self.assertEqual(view.selectedRows(), [0, 2, 4])
+        QTest.keyClick(view, Qt.Key_C, Qt.ControlModifier)
+        QTest.keyClick(view, Qt.Key_V, Qt.ControlModifier)
+        self.assertEqual([p['id'] for p in registry.packets[5:]], [0x120, 0x122, 0x124])
+        self.assertEqual([p['bus'] for p in registry.packets[5:]], [0, 0, 0])
+        self.assertEqual(len({p['packet_id'] for p in registry.packets}), 8)
+        self.assertEqual(view.selectedRows(), [5, 6, 7])
+        registry.packets[5]['data'][0] = 1
+        self.assertEqual(panel._packet_clipboard[0]['data'][0], 0xAA)
+        view.scrollToTop()
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, point(1))
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.ShiftModifier, point(3))
+        self.assertEqual(view.selectedRows(), [1, 2, 3])
+        view.clearSelection()
+        QTest.mousePress(view.viewport(), Qt.LeftButton, Qt.NoModifier, point(0))
+        move = QMouseEvent(QEvent.MouseMove, QPointF(point(3)), Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+        QApplication.sendEvent(view.viewport(), move)
+        QTest.mouseRelease(view.viewport(), Qt.LeftButton, Qt.NoModifier, point(3))
+        self.assertEqual(view.selectedRows(), [0, 1, 2, 3])
+        self.assertEqual(len(panel.tx_packets), 5)
+
+    def test_unassigned_packets_do_not_block_run_or_start_timers(self):
+        a, b = packet('a'), packet('b')
+        a['bus'] = b['bus'] = 0
+        panel = self.panel([a, b, packet('live', 0x456)])
+        panel.set_mode('run')
+        self.assertEqual(panel.mode, 'run')
+        self.assertEqual(set(panel._frame_timers), {'live'})
+        with self.assertRaisesRegex(ValueError, '미선택'):
+            panel._packet_runtimes['a'].send()
+        QTest.qWait(50)
+        self.assertTrue(self.sent)
+        self.assertTrue(all(msg.arbitration_id == 0x456 for msg in self.sent))
+        dialog = RegisteredPacketDialog({}, packet=a)
+        self.addCleanup(dialog.close)
+        self.assertEqual(dialog.combo_bus.currentText(), '미선택')
+        self.assertEqual(dialog.get_packet_data()['bus'], 0)
+
+    def test_packet_grid_columns_and_drop_move_entire_packet(self):
+        first = packet('a')
+        first.update(is_fd=True, is_brs=True, length=12, data=[0] * 12, note='Test note')
+        panel = self.panel([first, packet('b', 0x124)])
+        registry = PacketRegistryDialog(panel)
+        registry.show()
+        self.app.processEvents()
+        self.addCleanup(registry.close)
+        model = registry.list.model()
+        self.assertEqual([model.data(model.index(0, col)) for col in range(8)],
+                         ['1', '0x123', 'Test', 'FD', 'ON', '12', '20 ms', 'Test note'])
+        self.assertEqual(model.data(model.index(0, 7), Qt.ToolTipRole), 'Test note')
+        registry.list.setCurrentRow(0)
+        target = registry.list.visualRect(model.index(1, 0))
+        accepted = []
+        event = SimpleNamespace(source=lambda: registry.list,
+                                pos=lambda: QPoint(target.center().x(), target.bottom() - 1),
+                                setDropAction=lambda action: None, accept=lambda: accepted.append(True),
+                                ignore=lambda: self.fail('Internal move was rejected'))
+        registry.list.dropEvent(event)
+        self.assertTrue(accepted)
+        self.assertEqual([p['packet_id'] for p in registry.packets], ['b', 'a'])
+        self.assertEqual(model.data(model.index(1, 7)), 'Test note')
+        self.assertEqual(registry.list.currentRow(), 1)
+
+    def test_copied_packet_preserves_format_and_payload_when_changing_bus(self):
+        for fd, brs, length in [(True, True, 32), (True, False, 12), (False, False, 7)]:
+            with self.subTest(fd=fd, brs=brs, length=length):
+                original = packet()
+                original.update(is_fd=fd, is_brs=brs, length=length, data=list(range(length)))
+                dialog = RegisteredPacketDialog({}, packet=original)
+                self.addCleanup(dialog.close)
+                for bus in (1, 2, 3):
+                    dialog.combo_bus.setCurrentText(str(bus))
+                    result = dialog.get_packet_data()
+                    self.assertEqual(result['bus'], bus)
+                    for key in ('is_fd', 'is_brs', 'length', 'data', 'cycle'):
+                        self.assertEqual(result[key], original[key])
+
+    def test_registry_reorder_preserves_identity_and_copy_delete_target(self):
+        original = [packet('a', 0x123), packet('b', 0x124), packet('c', 0x125)]
+        panel = self.panel(original)
+        registry = PacketRegistryDialog(panel)
+        model = registry.list.model()
+        self.assertTrue(model.moveRows(QModelIndex(), 0, 1, QModelIndex(), 3))
+        self.assertEqual([p['packet_id'] for p in registry.packets], ['b', 'c', 'a'])
+        self.assertTrue(model.moveRows(QModelIndex(), 2, 1, QModelIndex(), 0))
+        self.assertEqual(registry.packets, original)
+        self.assertTrue(model.moveRows(QModelIndex(), 0, 1, QModelIndex(), 3))
+        registry.list.setCurrentRow(0)
+        registry.copy_packet()
+        self.assertEqual(panel._packet_clipboard[0]['packet_id'], 'b')
+        registry.remove_packet()
+        self.assertEqual([p['packet_id'] for p in registry.packets], ['c', 'a'])
+        registry.reject()
+        self.assertEqual(panel.tx_packets, original)
+
+    def test_registry_copy_paste_creates_independent_packet(self):
+        panel = self.panel([packet()])
+        registry = PacketRegistryDialog(panel)
+        registry.list.setCurrentRow(0)
+        registry.copy_packet()
+        copied = copy.deepcopy(panel._packet_clipboard)
+        with patch('src.user_panel_v2.packets.RegisteredPacketDialog') as editor:
+            registry.paste_packet()
+            editor.assert_not_called()
+        self.assertEqual(len(registry.packets), 2)
+        self.assertEqual(registry.packets[1]['bus'], 0)
+        self.assertNotEqual(registry.packets[0]['packet_id'], registry.packets[1]['packet_id'])
+        self.assertEqual(registry.packets[1]['data'], copied[0]['data'])
+        registry.packets[1]['data'][0] = 0
+        self.assertEqual(panel._packet_clipboard, copied)
+        self.assertEqual(len(panel.tx_packets), 1)
+        self.assertEqual(registry.list.currentRow(), 1)
+        registry.close()
+
+    def test_registry_paste_cancel_and_duplicate_keep_packets(self):
+        panel = self.panel([packet()])
+        registry = PacketRegistryDialog(panel)
+        registry.list.setCurrentRow(0)
+        registry.copy_packet()
+        registry.paste_packet()
+        registry.paste_packet()
+        self.assertEqual([p['bus'] for p in registry.packets], [1, 0, 0])
+        with patch('src.user_panel_v2.packets.RegisteredPacketDialog') as editor:
+            editor.return_value.exec_.return_value = QDialog.Rejected
+            registry.edit_packet(True)
+            self.assertEqual(len(registry.packets), 3)
+            editor.return_value.exec_.return_value = QDialog.Accepted
+            editor.return_value.get_packet_data.return_value = copy.deepcopy(panel._packet_clipboard[0])
+            with patch('src.user_panel_v2.packets.QMessageBox.warning') as warning:
+                registry.edit_packet(True)
+                warning.assert_called_once()
+            self.assertEqual(len(registry.packets), 3)
+        registry.close()
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QPushButton
 from cantools.database.can import Message, Signal
 from src.user_panel_v2.window import UserPanelWindow
 from src.user_panel_v2.sequence import SequenceControl, validate_steps
@@ -22,6 +22,25 @@ def packet():
 
 
 class SequenceTest(unittest.TestCase):
+    def test_sequence_cell_selection_remains_visible_when_deleting(self):
+        steps = [dict(kind='DEL', delay_ms=10, name='First'),
+                 dict(kind='DEL', delay_ms=20, name='Second')]
+        editor = SequenceDialog({}, steps)
+        self.addCleanup(editor.close)
+        editor.show()
+        self.app.processEvents()
+        QTest.mouseClick(editor.table.cellWidget(1, 2), Qt.LeftButton)
+        self.assertEqual(editor.table.currentRow(), 1)
+        self.assertEqual(editor.table.verticalHeaderItem(1).text(), '▶ 2')
+        self.assertEqual(editor.table.verticalHeaderItem(0).text(), '1')
+        delete = next(b for b in editor.findChildren(QPushButton) if b.text() == '삭제')
+        delete.setFocus()
+        self.app.processEvents()
+        self.assertEqual(editor.table.verticalHeaderItem(1).text(), '▶ 2')
+        QTest.mouseClick(delete, Qt.LeftButton)
+        self.assertEqual([s['name'] for s in editor.steps], ['First'])
+        self.assertEqual(editor.table.verticalHeaderItem(0).text(), '▶ 1')
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
