@@ -4,10 +4,12 @@ import time
 from datetime import datetime
 
 import can
-from PyQt5.QtCore import QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QTextCursor, QTextCharFormat
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QTextEdit, QAction
+from PyQt5.QtCore import QTimer, pyqtSignal, QSize, Qt
+from PyQt5.QtGui import QColor, QIcon, QTextCursor, QTextCharFormat
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+                             QToolButton, QSizePolicy, QTextEdit, QAction)
 from src.crc_utils import calculate_crc16_ccitt_false
+from src.utils import get_resource_path
 from .masked_data import masked_match
 
 
@@ -82,8 +84,25 @@ class SequenceControl(QWidget):
         self.watchdog.timeout.connect(self._check_connection)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(4)
         self.button = QPushButton()
-        self.button.clicked.connect(self.toggle)
+        self.button.clicked.connect(lambda: self.toggle())
+        self.force_button = QToolButton()
+        self.force_button.setIcon(QIcon(get_resource_path('icon/panel/force.svg')))
+        force_button_width = max(1, int(getattr(owner, 'grid_cell_size', 32)))
+        force_icon_size = max(8, min(24, force_button_width - 8))
+        self.force_button.setIconSize(QSize(force_icon_size, force_icon_size))
+        self.force_button.setToolTip('강제 실행 (RCV 무시)')
+        self.force_button.setAccessibleName('강제 실행 (RCV 무시)')
+        self.force_button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.force_button.setFixedWidth(force_button_width)
+        self.force_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.force_button.setStyleSheet(
+            'QToolButton { background:#fff3db; border:1px solid #d79b34; border-radius:3px; padding:0; } '
+            'QToolButton:hover { background:#ffe3ad; }')
+        self.force_button.clicked.connect(lambda: self.force_toggle())
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setStyleSheet("background:white; color:black;")
@@ -91,9 +110,10 @@ class SequenceControl(QWidget):
         clear = QAction("로그 지우기", self.log)
         clear.triggered.connect(self.log.clear)
         self.log.addAction(clear)
-        from PyQt5.QtCore import Qt
         self.log.setContextMenuPolicy(Qt.ActionsContextMenu)
-        layout.addWidget(self.button)
+        actions.addWidget(self.button, 1)
+        actions.addWidget(self.force_button)
+        layout.addLayout(actions)
         layout.addWidget(self.log, 1)
         self._state("ready", "실행")
 
@@ -137,6 +157,17 @@ class SequenceControl(QWidget):
             self._state("stop", "정지됨 · 재실행")
             self.finished.emit(False)
 
+    def force_toggle(self):
+        if self.running:
+            self.stop()
+            return
+        if self.owner.mode != 'run':
+            return
+        authorize = getattr(self.owner, '_authorize_communication', None)
+        if authorize is not None and not authorize():
+            return
+        self.toggle(force_rcv_skip=True)
+
     def fail(self, message):
         self.timer.stop()
         self.watchdog.stop()
@@ -169,7 +200,7 @@ class SequenceControl(QWidget):
             except ValueError as exc:
                 self.fail(str(exc))
 
-    def toggle(self):
+    def toggle(self, force_rcv_skip=False):
         if self.running:
             self.stop()
             return
@@ -182,8 +213,11 @@ class SequenceControl(QWidget):
         self.failure_steps = []
         try:
             self.steps = copy.deepcopy(self.cfg.get("binding", {}).get("sequence_steps", []))
+            skipped_receives = sum(step.get('kind') == 'RCV' for step in self.steps) if force_rcv_skip else 0
+            if force_rcv_skip:
+                self.steps = [step for step in self.steps if step.get('kind') != 'RCV']
             failures = copy.deepcopy(self.cfg.get('binding', {}).get('sequence_failure_steps', []))
-            validate_steps(self.steps)
+            validate_steps(self.steps, allow_empty=force_rcv_skip)
             validate_steps(failures, actions_only=True, allow_empty=True)
             if hasattr(self.owner, 'tx_packets'):
                 from .packets import validate_tool
@@ -205,7 +239,9 @@ class SequenceControl(QWidget):
         self.index = -1
         self.started = time.time()
         self.last_receive = "수신 없음"
-        self.write("--- 시퀀스 시작 ---")
+        if force_rcv_skip:
+            self.write(f'강제 실행: RCV {skipped_receives}단계 건너뜀')
+        self.write("--- 강제 시퀀스 시작 ---" if force_rcv_skip else "--- 시퀀스 시작 ---")
         self.watchdog.start()
         self._next()
 

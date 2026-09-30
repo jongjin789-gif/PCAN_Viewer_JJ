@@ -6,7 +6,7 @@ import sys
 import json
 import math
 import base64
-from src.tx_counter import counter_payload
+from src.tx_counter import counter_payload, latest_rx_payload
 from src.db_frame_format import message_is_fd
 from src.tx_crc import validate_crc, crc_order
 from src.tx_crc_dialog import SignalCRCDialog
@@ -55,7 +55,11 @@ class TxPacketDialog(QDialog):
 
     def add_counter_cells(self, row, sig):
         combo = QComboBox()
-        for label, mode in [("None", "none"), ("카운트 업", "up"), ("카운트 다운", "down"), ("순환(up,down,up...)", "alternate"), ("CRC-8", "crc8"), ("CRC-16", "crc16")]:
+        for label, mode in [("None", "none"), ("카운트 업", "up"), ("카운트 다운", "down"),
+                    ("순환(up,down,up...)", "alternate"),
+                    ("수신값 동기화 + 업", "rx_up"), ("수신값 동기화 + 다운", "rx_down"),
+                    ("수신값 동기화 + 왕복", "rx_alternate"),
+                    ("CRC-8", "crc8"), ("CRC-16", "crc16")]:
             combo.addItem(label, mode)
         self.table_signals.setCellWidget(row, 4, combo)
         low = -(1 << (sig.length - 1)) if sig.is_signed else 0
@@ -870,7 +874,10 @@ class TxPacketItem(SortableTreeWidgetItem):
                 next_states = {}
                 if d.get("signal_counters"):
                     db_msg = self.tx_panel.db_messages[d["bus"]][d["id"]]
-                    full_data, next_states = counter_payload(db_msg, full_data, d["signal_counters"], self.counter_states)
+                    received_payload = latest_rx_payload(self.tx_panel.main_window, d['bus'], can_id)
+                    full_data, next_states = counter_payload(
+                        db_msg, full_data, d["signal_counters"], self.counter_states,
+                        received_payload=received_payload)
                 total_length = d["length"]
 
                 if d.get('crc_type') == 'Hyundai_CRC':

@@ -189,22 +189,24 @@ class PropertiesTest(unittest.TestCase):
         p.refresh_dbc_bindings()
         self.assertEqual(p.widgets_config[0]["binding"]["signal_name"], "Speed")
 
-    def test_sequence_details_stay_inside_properties(self):
+    def test_sequence_settings_open_in_separate_dialog(self):
         cfg = self.config()
         cfg["widget_type"] = "sequence"
         cfg["binding"]["sequence_steps"] = [dict(kind="DEL", delay_ms=10)]
         p = self.panel([cfg])
         editor = p.properties.editor
-        with patch("src.user_panel_v2.sequence_dialog.SequenceDialog.exec_", side_effect=AssertionError("Modal editor")):
+        opened = []
+
+        def accept_sequence(dialog):
+            opened.append(dialog)
+            dialog.steps[0]["delay_ms"] = 125
+            return dialog.Accepted
+
+        with patch("src.user_panel_v2.sequence_dialog.SequenceDialog.exec_", new=accept_sequence):
             editor._edit_sequence()
-        sequence = editor._inline_editor
-        self.assertFalse(sequence.isWindow())
-        sequence.edit(0)
-        delay = sequence._inline_editor
-        self.assertFalse(delay.isWindow())
-        delay.setIntValue(125)
-        delay.accept()
-        sequence.accept()
+        self.assertEqual(len(opened), 1)
+        self.assertTrue(opened[0].isWindow())
+        self.assertEqual(opened[0].width(), 850)
         editor.accept()
         self.assertEqual(p.widgets_config[0]["binding"]["sequence_steps"][0]["delay_ms"], 125)
 

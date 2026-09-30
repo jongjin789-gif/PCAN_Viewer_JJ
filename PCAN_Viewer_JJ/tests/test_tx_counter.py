@@ -36,6 +36,30 @@ class CounterTest(unittest.TestCase):
                     self.assertEqual(payload[1:], bytes([0xAA] * 7))
                 self.assertEqual(values, expected)
 
+    def test_rx_synchronized_counter_copies_changes_then_counts_up(self):
+        message = Message(0x123, 'Test', 1, [Signal('Alive', 0, 8)])
+        config = {'Alive': dict(mode='rx_up', min=0, max=255, step=1)}
+        states = {}
+        values = []
+        for received in (7, 7, 12, 12):
+            payload, states = counter_payload(
+                message, bytes([0]), config, states, received_payload=bytes([received]))
+            values.append(message.decode(payload, scaling=False)['Alive'])
+        self.assertEqual(values, [7, 8, 12, 13])
+
+    def test_rx_synchronized_counter_supports_down_and_alternate_fallback(self):
+        message = Message(0x123, 'Test', 1, [Signal('Alive', 0, 8)])
+        for mode, expected in (('rx_down', [7, 6, 5, 9]),
+                               ('rx_alternate', [7, 8, 9, 8])):
+            states = {}
+            values = []
+            config = {'Alive': dict(mode=mode, min=5, max=9, step=1)}
+            for received in (7, 7, 7, 7):
+                payload, states = counter_payload(
+                    message, bytes([0]), config, states, received_payload=bytes([received]))
+                values.append(message.decode(payload, scaling=False)['Alive'])
+            self.assertEqual(values, expected)
+
     def test_fd_initialization_length_and_edit_roundtrip(self):
         parent = QWidget()
         parent.main_window = SimpleNamespace(bus_capabilities={1: {'is_fd': True}})
@@ -47,7 +71,9 @@ class CounterTest(unittest.TestCase):
             dialog.combo_symbol.setCurrentIndex(1)
             self.assertEqual(dialog.combo_length.currentText(), str(wire_length))
             self.assertEqual(len(dialog.get_packet_data()['data']), wire_length)
-            dialog.table_signals.cellWidget(0, 4).setCurrentIndex(1)
+            counter_mode = dialog.table_signals.cellWidget(0, 4)
+            counter_mode.setCurrentIndex(counter_mode.findData('rx_up'))
+            self.assertEqual(counter_mode.currentData(), 'rx_up')
             self.assertFalse(dialog.table_signals.isColumnHidden(5))
             data = dialog.get_packet_data()
             restored = TxPacketDialog(dialog.db_messages, parent)

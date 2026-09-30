@@ -78,6 +78,10 @@ class InitSequenceTest(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)  # CMD works while periodic TX is stopped.
         self.assertFalse(panel._frame_timers)
         QTest.qWait(80)
+        deadline = time.monotonic() + 0.3
+        while len(self.sent) <= 1 and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
         self.assertGreater(len(self.sent), 1)
         panel.set_mode('standard')
         self.sent.clear()

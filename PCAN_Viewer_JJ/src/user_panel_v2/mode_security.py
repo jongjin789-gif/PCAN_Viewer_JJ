@@ -39,5 +39,5 @@ def verify_edit_password(parent, enabled, expected_password):
 
 
 def verify_communication_password(parent, expected_password):
-    dlg = EditPasswordDialog(parent, purpose='통신 / Force RUN')
+    dlg = EditPasswordDialog(parent, purpose='통신')
     return dlg.exec_() == QDialog.Accepted and dlg.value() == expected_password

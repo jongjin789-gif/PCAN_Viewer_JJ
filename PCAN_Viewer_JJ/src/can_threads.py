@@ -18,6 +18,7 @@ class CANReceiverThread(QThread):
         self.db_messages = db_messages  # {can_id: cantools.Message}
         self.running = False
         self.latest_data = {}  # {signal_name: (value, unit, timestamp)}
+        self.latest_rx_data = {}  # {can_id: (raw_payload, timestamp)}; excludes local Tx echoes
         self.latest_msg_stats = {}  # {can_id: {"count": 0, "cycle": 0.0, "last_time": None, "data": b""}}
         
         # 타임스탬프 정규화를 위한 변수
@@ -58,6 +59,8 @@ class CANReceiverThread(QThread):
                 )
                 if msg.is_error_frame:
                     continue
+                if msg.is_rx:
+                    self.latest_rx_data[int(msg.arbitration_id)] = (bytes(msg.data), float(normalized_timestamp))
                 
                 # 모든 수신 메시지 통계(Count, Cycle Time, Data) 업데이트
                 can_id = msg.arbitration_id

@@ -218,3 +218,29 @@ class PanelClearHistoryTest(unittest.TestCase):
         self.assertNotIn('FD를 지원하지', self.main.session.errors[0])
         self.assertNotIn('지원하지 않는 설정', self.main.session.errors[0])
         self.assertIn(1, self.main.session.pending_can)
+
+    def test_startup_missing_saved_device_stays_closed_without_alert(self):
+        from src.session_storage import write_session
+
+        state = self.main.session.capture()
+        state['can']['1'].update(device=dict(bustype='pcan', handle=999),
+                                 channel='Missing', is_open=True)
+        path = Path(self.temp.name) / 'missing-device.pjjsettings'
+        write_session(path, state)
+        self.main.session.autosave_path = Path(self.temp.name) / 'auto.pjjsettings'
+        self.main.search_can_channels = Mock()
+        self.main.combo_channels[1].clear()
+        self.main.combo_channels[1].addItem('No device', None)
+        self.main.session.report = Mock()
+
+        with patch.object(self.main, 'on_channel_changed'):
+            self.assertTrue(self.main.session.load(path, startup=True))
+
+        self.assertIsNone(self.main.buses[1])
+        self.assertIn(1, self.main.session.pending_can)
+        self.main.session.report.assert_not_called()
+
+        with patch.object(self.main, 'on_channel_changed'):
+            self.assertTrue(self.main.session.load(path))
+        self.main.session.report.assert_called_once()
+        self.assertIn('저장된 장치를 찾을 수 없습니다', self.main.session.report.call_args.args[2][0])

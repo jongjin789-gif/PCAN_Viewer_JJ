@@ -258,6 +258,22 @@ class PanelPacketTest(unittest.TestCase):
         runtime.send()
         self.assertEqual(self.sent[0].data[0], 3)
 
+    def test_rx_counter_syncs_packet_runtime_then_counts_when_rx_is_unchanged(self):
+        p = packet(cycle=0)
+        p['signal_counters'] = {'Alive': dict(mode='rx_up', min=0, max=255, step=1)}
+        msg = Message(p['id'], 'Test', 8, [Signal('Alive', 0, 8)])
+        panel = self.panel([p], db={1: {p['id']: msg}})
+        panel.main_window.rx_threads = {
+            1: SimpleNamespace(latest_rx_data={p['id']: (bytes([7] + [0] * 7), 1.0)})}
+        runtime = PacketRuntime(p, panel.db_messages, panel.main_window)
+
+        runtime.send()
+        runtime.send()
+        panel.main_window.rx_threads[1].latest_rx_data[p['id']] = (bytes([12] + [0] * 7), 2.0)
+        runtime.send()
+
+        self.assertEqual([message.data[0] for message in self.sent], [7, 8, 12])
+
     def test_registered_packet_checks_connection_type_at_each_send(self):
         for packet_fd in (False, True):
             p = packet(cycle=0)

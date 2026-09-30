@@ -11,6 +11,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtTest import QTest
 from src.user_panel_v2.window import UserPanelWindow
+from src.user_panel_v2.sequence import SequenceControl
 from src.user_panel_v2.connection_dialog import ConnectionDialog
 from src.main_window import UniversalCANMonitor
 from src.session_manager import SessionManager
@@ -60,39 +61,55 @@ class PanelOperationTest(unittest.TestCase):
         self.assertEqual(panel.init_steps, steps)
         self.assertIn('RCV', panel.system_log.text.toPlainText())
 
-    def test_force_skips_cmd_rcv_del_and_applies_actions_in_order(self):
-        p, q = packet(), packet('q', 2)
-        steps = [dict(kind='CMD', packet=q), dict(kind='RCV', packet=q, mask=[255]*8, timeout_ms=5000),
-                 dict(kind='DEL', delay_ms=5000), dict(kind='STOP', target_packet_id='*'),
-                 dict(kind='START', target_packet_id='p'), dict(kind='STOP', target_packet_id='p'),
-                 dict(kind='START', target_packet_id='p')]
-        panel = self.panel(steps, [p, q])
-        with patch('src.user_panel_v2.window.verify_communication_password', return_value=True) as verify:
-            panel.force_run()
-            verify.assert_called_once_with(panel, 'communication-secret')
-        self.assertEqual(panel.mode, 'run')
-        self.assertTrue(panel._force_running)
-        self.assertFalse(panel._init_running)
-        self.assertFalse(panel.init_control.running)
-        self.assertEqual(panel._paused_packets, {'q'})
-        self.assertFalse(self.sent)
-        QTest.qWait(35)
-        self.assertTrue(self.sent)
-        self.assertTrue(all(m.arbitration_id == p['id'] for m in self.sent))
-        panel.set_mode('standard')
+    def test_sequence_force_skips_receive_and_runs_remaining_steps(self):
+        p, q = packet(), packet('q')
+        panel = self.panel([], [p, q])
         panel.set_mode('run')
-        self.assertEqual(panel.mode, 'standby')
-        self.assertIn('CMD/RCV/DEL 생략', panel.system_log.text.toPlainText())
+        steps = [dict(kind='STOP', target_packet_id='*'), dict(kind='CMD', packet=q),
+                 dict(kind='RCV', packet=q, mask=[255]*8, timeout_ms=5000),
+                 dict(kind='DEL', delay_ms=5), dict(kind='START', target_packet_id='p'),
+                 dict(kind='DEL', delay_ms=30), dict(kind='STOP', target_packet_id='p')]
+        cfg = dict(id='seq', title='Test', widget_type='sequence', behavior='tx',
+                   binding=dict(sequence_steps=steps))
+        control = SequenceControl(panel, cfg)
+        self.assertEqual(control.force_button.minimumWidth(), panel.grid_cell_size)
+        self.assertEqual(control.force_button.maximumWidth(), panel.grid_cell_size)
+        panel.widget_controls['seq'] = control
+        self.addCleanup(control.deleteLater)
 
-    def test_force_denied_has_no_side_effects(self):
-        panel = self.panel([])
+        with patch('src.user_panel_v2.window.verify_communication_password', return_value=True) as verify:
+            control.force_toggle()
+            verify.assert_called_once_with(panel, 'communication-secret')
+        QTest.qWait(100)
+
+        self.assertFalse(control.running)
+        self.assertEqual(panel.mode, 'run')
+        self.assertEqual(panel._paused_packets, {'p', 'q'})
+        self.assertEqual({message.arbitration_id for message in self.sent}, {p['id'], q['id']})
+        log = control.log.toPlainText()
+        self.assertIn('RCV 1단계 건너뜀', log)
+        self.assertIn('CMD BUS_1 0x124', log)
+        self.assertIn('DEL', log)
+        self.assertIn('주기 전송 시작', log)
+        self.assertIn('주기 전송 정지', log)
+
+    def test_sequence_force_requires_communication_authorization(self):
+        p = packet()
+        panel = self.panel([], [p])
+        panel.set_mode('run')
+        control = SequenceControl(panel, dict(id='seq', title='Test', widget_type='sequence',
+                                               behavior='tx', binding=dict(sequence_steps=[dict(kind='CMD', packet=p)])))
+        self.addCleanup(control.deleteLater)
         with patch('src.user_panel_v2.window.verify_communication_password', return_value=False):
-            panel.force_run()
-            with patch('src.user_panel_v2.connection_dialog.ConnectionDialog') as dialog:
-                panel.open_communication()
-                dialog.assert_not_called()
-        self.assertEqual(panel.mode, 'standby')
-        self.assertFalse(self.sent)
+            control.force_toggle()
+        self.assertFalse(control.running)
+        self.assertEqual(panel.mode, 'run')
+
+    def test_force_run_is_not_a_panel_mode(self):
+        panel = self.panel([])
+        self.assertFalse(hasattr(panel, 'btn_force_run'))
+        self.assertFalse(hasattr(panel, 'force_run'))
+        self.assertNotIn('Force RUN', panel.label_mode.text())
 
     def test_init_type_change_during_delay_stops_before_next_command(self):
         p = packet()
@@ -104,16 +121,6 @@ class PanelOperationTest(unittest.TestCase):
         self.assertFalse(panel.init_control.running)
         self.assertFalse(self.sent)
         self.assertIn('타입 불일치', panel.system_log.text.toPlainText())
-
-    def test_normal_run_after_force_does_not_keep_bypass(self):
-        q = packet('q', 2)
-        panel = self.panel([dict(kind='CMD', packet=q)], [q])
-        with patch('src.user_panel_v2.window.verify_communication_password', return_value=True):
-            panel.force_run()
-        self.assertEqual(panel.mode, 'run')
-        panel.set_mode('run')
-        self.assertEqual(panel.mode, 'standby')
-        self.assertFalse(panel._frame_timers)
 
     def main(self, panel_only=False):
         with patch.object(SessionManager, 'start'), patch.object(UniversalCANMonitor, 'search_can_channels'):

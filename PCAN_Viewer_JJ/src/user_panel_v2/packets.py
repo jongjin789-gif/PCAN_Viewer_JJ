@@ -1,6 +1,7 @@
 """Registered TX packets, bit overlays, and panel-owned transmission state."""
 import copy
 import uuid
+import threading
 import can
 from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel
 from PyQt5.QtGui import QKeySequence
@@ -8,7 +9,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QListWidget, QDialogButtonBox, QMessageBox, QComboBox, QSpinBox, QLabel, QCheckBox, QShortcut,
                              QAbstractItemView, QTableView, QHeaderView)
 from src.tx_panel import TxPacketDialog
-from src.tx_counter import counter_payload
+from src.tx_counter import counter_payload, latest_rx_payload
 from src.crc_utils import calculate_crc16_ccitt_false
 from .binding import pack_value, bit_positions
 from .commands import command_bindings
@@ -127,14 +128,27 @@ class PacketRuntime:
         self.overlay = bytearray(packet['data'])
         self.states = {}
         self.alive = 0
+        self.lock = threading.RLock()
+        if not hasattr(main, '_panel_bus_locks'):
+            main._panel_bus_locks = {bus: threading.RLock() for bus in (0, 1, 2, 3)}
+        self.bus_lock = main._panel_bus_locks[packet['bus']]
 
     def stage(self, binding, value):
-        updated = pack_value(self.overlay, binding, value)
-        changed = updated != self.overlay
-        self.overlay = updated
-        return changed
+        with self.lock:
+            updated = pack_value(self.overlay, binding, value)
+            changed = updated != self.overlay
+            self.overlay = updated
+            return changed
 
-    def send(self, data_override=None, data_mask=None):
+    def send(self, data_override=None, data_mask=None, record=True):
+        with self.lock, self.bus_lock:
+            payload = self._send_locked(data_override, data_mask)
+        if record and hasattr(self.main, 'record_tx_activity'):
+            p = self.packet
+            self.main.record_tx_activity(p['bus'], p['id'], payload, p['is_fd'])
+        return payload
+
+    def _send_locked(self, data_override=None, data_mask=None):
         p = self.packet
         bus = connected_packet_bus(self.main, p)
         if data_override is not None:
@@ -151,7 +165,9 @@ class PacketRuntime:
             message = self.db_messages.get(p['bus'], {}).get(p['id'])
             if message is None:
                 raise ValueError('카운트/CRC 신호가 포함된 DBC/SYM을 불러오세요.')
-            payload, states = counter_payload(message, payload, p['signal_counters'], self.states)
+            received_payload = latest_rx_payload(self.main, p['bus'], p['id'])
+            payload, states = counter_payload(message, payload, p['signal_counters'], self.states,
+                                              received_payload=received_payload)
         if p.get('crc_type') == 'Hyundai_CRC':
             body = bytes([self.alive]) + payload[3:]
             crc = calculate_crc16_ccitt_false(body + (0xF800 + p['id']).to_bytes(2, 'little'))
@@ -165,8 +181,6 @@ class PacketRuntime:
         self.overlay = bytearray(payload)
         self.states = states
         self.alive = (self.alive + 1) % 256
-        if hasattr(self.main, 'record_tx_activity'):
-            self.main.record_tx_activity(p['bus'], p['id'], payload, p['is_fd'])
         return payload
 
 

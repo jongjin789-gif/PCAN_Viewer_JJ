@@ -46,15 +46,26 @@ def unpack_raw(payload, binding):
     return raw
 
 
-def pack_value(payload, binding, value):
-    positions = bit_positions(binding, len(payload))
+def _quantized_raw(binding, value, length):
     scale = float(binding.get("scale", 1))
     if scale == 0:
         raise ValueError("Scale must not be zero.")
-    raw = round((float(value) - float(binding.get("offset", 0))) / scale)
-    length = len(positions)
+    offset = float(binding.get("offset", 0))
+    raw = round((float(value) - offset) / scale)
     low, high = (-(1 << (length - 1)), (1 << (length - 1)) - 1) if binding.get("signed") else (0, (1 << length) - 1)
-    raw = max(low, min(high, raw)) & ((1 << length) - 1)
+    return max(low, min(high, raw))
+
+
+def quantize_value(binding, value):
+    length = int(binding.get("bit_length", 8))
+    raw = _quantized_raw(binding, value, length)
+    return raw * float(binding.get("scale", 1)) + float(binding.get("offset", 0))
+
+
+def pack_value(payload, binding, value):
+    positions = bit_positions(binding, len(payload))
+    length = len(positions)
+    raw = _quantized_raw(binding, value, length) & ((1 << length) - 1)
     result = bytearray(payload)
     for i, p in enumerate(positions):
         mask = 1 << (p % 8)

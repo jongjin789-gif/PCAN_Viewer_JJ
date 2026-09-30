@@ -8,6 +8,9 @@ from PyQt5.QtWidgets import QApplication
 from src.db_frame_format import load_sym_with_fd, message_is_fd
 from src.tx_panel import TxPacketDialog
 from src.main_window import UniversalCANMonitor
+from src.main_window import UniversalCANMonitor, _signal_display_decimals
+from cantools.database.can import Signal
+from cantools.database.conversion import BaseConversion
 
 
 class FrameFormatTest(unittest.TestCase):
@@ -34,6 +37,11 @@ class FrameFormatTest(unittest.TestCase):
             attr = SimpleNamespace(value=1, definition=SimpleNamespace(choices=['StandardCAN', label]))
             msg = SimpleNamespace(is_fd=False, length=8, dbc=SimpleNamespace(attributes={'VFrameFormat': attr}))
             self.assertTrue(message_is_fd(msg))
+
+    def test_signal_display_precision_covers_dbc_factor_and_offset(self):
+        signal = Signal("Angle", 71, 16, byte_order="big_endian",
+                        conversion=BaseConversion.factory(scale=0.0625, offset=-780.125))
+        self.assertEqual(_signal_display_decimals(signal), 4)
 
     def test_user_sym_title_brs_and_signal_metadata(self):
         content = Path(__file__).with_name('fd_rwa.sym').read_text(encoding='utf-8')

@@ -20,6 +20,19 @@ from src.user_panel import UserPanelWindow
 from src.session_manager import SessionManager
 from src.main_menu import install_main_menu
 
+
+def _signal_display_decimals(signal):
+    def decimal_places(value):
+        try:
+            text = f"{float(value):.12f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return 0
+        return len(text.split(".", 1)[1]) if "." in text else 0
+
+    return max(3, decimal_places(getattr(signal, "scale", 1.0)),
+               decimal_places(getattr(signal, "offset", 0.0)))
+
+
 class UniversalCANMonitor(QMainWindow):
     def __init__(self, viewer_only=False, user_panel_security=None, user_panel_only=False, communication_password='1234'):
         super().__init__()
@@ -45,6 +58,7 @@ class UniversalCANMonitor(QMainWindow):
         self.db_messages = {1: {}, 2: {}, 3: {}} # {bus_num: {can_id: cantools.message.Message}}
         self.signal_tree_items = {} # {(bus_num, signal_name): QTreeWidgetItem}
         self.signal_choices = {} # {(bus_num, signal_name): choices} Enum 딕셔너리 정보
+        self.signal_display_decimals = {}
         self.msg_tree_items = {} # {(bus_num, can_id): QTreeWidgetItem}
         self.active_graphs = [] # [SignalGraphWindow, ...]
         self.synced_graphs_ordered = []
@@ -519,23 +533,33 @@ class UniversalCANMonitor(QMainWindow):
             panel.on_sequence_receive(ts, bus_num, can_id, data, is_ext, is_fd, is_brs)
         try:
             if getattr(self, 'record_window', None) and self.record_window.isVisible():
-                self.record_window.add_log_entry(ts, can_id, data, is_ext, is_err, is_fd, is_rx, bus_num)
+                self.record_window.add_log_entry(ts, can_id, data, is_ext, is_err, is_fd, is_rx, bus_num,
+                                                 preserve_timestamp=not is_rx)
         except RuntimeError:
             self.record_window = None
 
-    def record_tx_activity(self, bus_num, can_id, data, is_fd):
+    def record_tx_activity(self, bus_num, can_id, data, is_fd, timestamp=None):
         """Rx 스레드를 거치지 않는 수동 Tx(로그 재생/Tx 패널)도 메인 트리에 즉시 반영합니다."""
         rx_thread = self.rx_threads.get(bus_num)
         if not rx_thread:
             return
 
-        now = time.time()
+        now = time.time() if timestamp is None else timestamp
         payload = bytes(data)
         stats = rx_thread.latest_msg_stats.get(
             can_id,
             {"count": 0, "cycle": 0.0, "last_time": None, "data": b"", "is_fd": False, "direction": 'Tx'}
         )
         stats["count"] += 1
+        if stats['last_time'] is not None and now < stats['last_time']:
+            # A periodic record may arrive after a newer immediate CMD record.
+            # Keep latest-value/cycle displays monotonic, but retain the older TX in the trace.
+            rx_thread.latest_msg_stats[can_id] = stats
+            recorder = getattr(self, 'record_window', None)
+            if recorder is not None and recorder.isVisible():
+                recorder.add_log_entry(now, can_id, payload, can_id > 0x7FF, False,
+                                       bool(is_fd), False, bus_num, preserve_timestamp=True)
+            return
         if stats["last_time"] is not None:
             stats["cycle"] = (now - stats["last_time"]) * 1000.0
         stats["last_time"] = now
@@ -921,7 +945,8 @@ class UniversalCANMonitor(QMainWindow):
             
             # 선택된 통신 속도 가져오기 (dict 형태)
             selected_bitrate_kwargs = self.combo_bitrate[bus_num].currentData()
-            kwargs = {'bustype': bustype, 'channel': channel_handle, 'receive_own_messages': True}
+            kwargs = {'bustype': bustype, 'channel': channel_handle,
+                      'receive_own_messages': bustype != 'pcan'}
             
             # FD 통신 설정이 활성화 되어있는지 (Data Bitrate) 확인
             if bustype == 'pcan':
@@ -1094,6 +1119,9 @@ class UniversalCANMonitor(QMainWindow):
         buses_to_close = [bus_num] if bus_num else [1, 2, 3]
         
         for b in buses_to_close:
+            panel = getattr(self, 'user_panel_window', None)
+            if panel is not None:
+                panel.stop_periodic_bus(b)
             if self.rx_threads[b]:
                 self.rx_threads[b].stop()
                 self.rx_threads[b] = None
@@ -1500,6 +1528,9 @@ class UniversalCANMonitor(QMainWindow):
             sig_item.setCheckState(3, Qt.Unchecked)
             
             self.signal_tree_items[(bus_num, sig.name)] = sig_item
+            key = (bus_num, sig.name)
+            self.signal_display_decimals[key] = max(
+                self.signal_display_decimals.get(key, 3), _signal_display_decimals(sig))
             
             # Enum 정보 저장
             if getattr(sig, 'choices', None):
@@ -1598,7 +1629,9 @@ class UniversalCANMonitor(QMainWindow):
                                 num_val = next((k for k, v in choices.items() if str(v) == val_str), None)
                                 display_val = f"{val_str} ({num_val})" if num_val is not None else val_str
                         else:
-                            display_val = val if isinstance(val, str) else (f"{val:.3f}" if isinstance(val, float) else str(val))
+                            decimals = self.signal_display_decimals.get((bus_num, sig_name), 3)
+                            display_val = val if isinstance(val, str) else (
+                                f"{val:.{decimals}f}" if isinstance(val, float) else str(val))
                         item.setText(5, display_val)
 
                     if self.user_panel_window and self.user_panel_window.isVisible():
@@ -1626,6 +1659,7 @@ class UniversalCANMonitor(QMainWindow):
         for (b, sig_name) in list(self.signal_tree_items.keys()):
             if b == bus_num:
                 del self.signal_tree_items[(b, sig_name)]
+                self.signal_display_decimals.pop((b, sig_name), None)
                 if (b, sig_name) in getattr(self, 'signal_choices', {}):
                     del self.signal_choices[(b, sig_name)]
                 

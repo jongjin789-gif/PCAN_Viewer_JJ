@@ -81,7 +81,7 @@ class RecordWindow(QWidget):
         self.log_lines.extend(header)
         self.text_edit.appendPlainText("\n".join(header))
         
-    def add_log_entry(self, ts, can_id, data, is_ext, is_err, is_fd, is_rx, bus_num=1):
+    def add_log_entry(self, ts, can_id, data, is_ext, is_err, is_fd, is_rx, bus_num=1, preserve_timestamp=False):
         if is_err: return # 에러 프레임은 생략
         if self.start_timestamp is None:
             self.start_timestamp = ts
@@ -89,9 +89,9 @@ class RecordWindow(QWidget):
         self.msg_count += 1
         # 멀티 버스/드라이버 타임스탬프 편차로 인한 음수/역전 시간을 방지합니다.
         offset_ms = max(0.0, (ts - self.start_timestamp) * 1000.0)
-        if offset_ms < self.last_offset_ms:
+        if not preserve_timestamp and offset_ms < self.last_offset_ms:
             offset_ms = self.last_offset_ms
-        self.last_offset_ms = offset_ms
+        self.last_offset_ms = max(self.last_offset_ms, offset_ms)
         can_id_hex = f"{can_id:08X}" if is_ext else f"{can_id:04X}"
         dlc = len(data)
         data_hex = " ".join(f"{b:02X}" for b in data)

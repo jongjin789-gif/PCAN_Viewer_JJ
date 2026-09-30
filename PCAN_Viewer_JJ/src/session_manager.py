@@ -49,7 +49,7 @@ class SessionManager(QObject):
         if self.main.viewer_only:
             return
         if self.autosave_path.exists():
-            if not self.load(self.autosave_path):
+            if not self.load(self.autosave_path, startup=True):
                 # Keep the damaged file available for recovery; don't overwrite it.
                 self.enabled = False
         else:
@@ -406,7 +406,7 @@ class SessionManager(QObject):
         m.btn_open_log.setEnabled(any(m.db_messages.values()))
         m.tx_panel.update_all_action_buttons()
 
-    def load(self, path):
+    def load(self, path, startup=False):
         if self.main.viewer_only or self.busy:
             return False
         prepared = backup_prepared = None
@@ -454,6 +454,8 @@ class SessionManager(QObject):
                 self.errors.append(f'화면 적용은 완료했지만 자동 복원 파일 저장 실패: {exc}')
             self.main.statusBar().showMessage('통합 설정 적용 완료 · 전체 송신 정지', 10000)
         issues, self.errors = self.errors, None
+        if startup:
+            issues = [issue for issue in issues if '저장된 장치를 찾을 수 없습니다' not in issue]
         if issues:
             status = [f'BUS {b}: {"Open" if self.main.buses[b] else "Close"}' for b in (1, 2, 3)]
             self.report('통합 불러오기 결과',

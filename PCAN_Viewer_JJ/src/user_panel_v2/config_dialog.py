@@ -198,11 +198,11 @@ class WidgetConfigDialog(QDialog):
         form_comm.addRow("Bit Length", self.spin_bit_length)
 
         self.spin_scale = QDoubleSpinBox()
-        self.spin_scale.setDecimals(3)
+        self.spin_scale.setDecimals(12)
         self.spin_scale.setRange(-1000000.0, 1000000.0)
         self.spin_scale.setValue(1.0)
         self.spin_offset = QDoubleSpinBox()
-        self.spin_offset.setDecimals(3)
+        self.spin_offset.setDecimals(12)
         self.spin_offset.setRange(-1000000.0, 1000000.0)
         form_comm.addRow("Scale", self.spin_scale)
         form_comm.addRow("Offset", self.spin_offset)
@@ -623,8 +623,6 @@ class WidgetConfigDialog(QDialog):
     def _apply_precision_setting(self):
         decimals = self._precision_decimals()
         for spin in (
-            self.spin_scale,
-            self.spin_offset,
             self.spin_min,
             self.spin_max,
             self.spin_press_value,
@@ -657,14 +655,6 @@ class WidgetConfigDialog(QDialog):
         from .sequence_dialog import SequenceDialog
         dlg = SequenceDialog(self.db_messages, self.sequence_steps, self, tx_packets=self.tx_packets,
                              failure_steps=self.sequence_failure_steps)
-        if self.embedded:
-            from .inline_editor import show_inline_editor
-            def apply_steps():
-                self.sequence_steps = copy.deepcopy(dlg.steps)
-                self.sequence_failure_steps = copy.deepcopy(dlg.failure_steps)
-                self._on_any_changed()
-            show_inline_editor(self, dlg, apply_steps)
-            return
         if dlg.exec_() == dlg.Accepted:
             self.sequence_steps = copy.deepcopy(dlg.steps)
             self.sequence_failure_steps = copy.deepcopy(dlg.failure_steps)
@@ -1130,8 +1120,8 @@ class WidgetConfigDialog(QDialog):
                 "start_bit": int(self.spin_start_bit.value()),
                 "bit_length": int(self.spin_bit_length.value()),
                 "value_precision_decimals": self._precision_decimals(),
-                "scale": self._round_value(self.spin_scale.value()),
-                "offset": self._round_value(self.spin_offset.value()),
+                "scale": float(self.spin_scale.value()),
+                "offset": float(self.spin_offset.value()),
                 "signed": bool(self.chk_signed.isChecked()),
                 "byte_order": self.combo_byte_order.currentData(),
                 "min": self._round_value(min_v),

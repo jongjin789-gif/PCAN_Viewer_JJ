@@ -3,6 +3,9 @@ import json
 import math
 import time
 import uuid
+import queue
+from contextlib import ExitStack
+from .periodic_sender import PeriodicSender
 from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QPoint, QSize
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QIcon
 from PyQt5.QtWidgets import (
@@ -50,7 +53,7 @@ from src.utils import get_resource_path
 from .storage import PACKAGE_EXT, load_bundle, load_panel_json, save_bundle, save_panel_json
 from .styles import TOOL_STYLE, lamp_style
 from .properties import ToolProperties
-from .binding import reconcile_binding, unpack_raw, matching_signal, bit_positions
+from .binding import reconcile_binding, unpack_raw, matching_signal, bit_positions, quantize_value
 from .commands import command_bindings
 from .packets import PacketRegistryDialog, PacketRuntime, find_packet, bind_packet, validate_tool, validate_packet, connected_packet_bus
 
@@ -118,7 +121,6 @@ class UserPanelWindow(QWidget):
         self.tx_packets = []
         self.init_steps = []
         self._init_running = False
-        self._force_running = False
         self._bus_snapshot = None
         self._paused_packets = set()
         self._packet_runtimes = {}
@@ -140,6 +142,14 @@ class UserPanelWindow(QWidget):
         self.latest_value_by_signal = {}
         self._tool_list_syncing = False
         self._frame_timers = {}
+        self._periodic_senders = {}
+        self._periodic_records = queue.Queue(maxsize=20000)
+        self._periodic_errors = queue.SimpleQueue()
+        self._periodic_reported_missed = {}
+        self._periodic_dropped_records = 0
+        self._periodic_monitor = QTimer(self)
+        self._periodic_monitor.setInterval(20)
+        self._periodic_monitor.timeout.connect(self._drain_periodic_events)
         self.draw_mode = None
         self.draw_start_cell = None
         self._shape_counter = 1
@@ -231,9 +241,6 @@ class UserPanelWindow(QWidget):
         controls.addWidget(self.btn_mode_edit)
         controls.addWidget(self.btn_mode_standby)
         controls.addWidget(self.btn_mode_run)
-        self.btn_force_run = tool_button('Force RUN', 'force')
-        self.btn_force_run.clicked.connect(self.force_run)
-        controls.addWidget(self.btn_force_run)
         add_separator()
         self.btn_communication = tool_button('통신 설정 / DBC', 'connection')
         self.btn_communication.clicked.connect(self.open_communication)
@@ -255,7 +262,7 @@ class UserPanelWindow(QWidget):
             controls.addWidget(button)
         controls.addStretch()
         root.addLayout(controls)
-        for button in (self.btn_mode_edit, self.btn_mode_standby, self.btn_mode_run, self.btn_force_run):
+        for button in (self.btn_mode_edit, self.btn_mode_standby, self.btn_mode_run):
             button.setCheckable(True)
             button.clicked.connect(self._sync_toolbar_modes)
 
@@ -458,8 +465,7 @@ class UserPanelWindow(QWidget):
     def _sync_toolbar_modes(self):
         for button, active in ((self.btn_mode_edit, self.mode == 'edit'),
                                (self.btn_mode_standby, self.mode == 'standby'),
-                               (self.btn_mode_run, self.mode == 'run' and not self._force_running),
-                               (self.btn_force_run, self.mode == 'run' and self._force_running)):
+                               (self.btn_mode_run, self.mode == 'run')):
             button.setChecked(active)
 
     def log_system(self, message, level='INFO'):
@@ -473,8 +479,6 @@ class UserPanelWindow(QWidget):
             mode, activity = 'STANDARD', '송신 정지 / 수신'
         elif self._init_running:
             mode, activity = 'RUN · INIT', 'INIT 실행 / 일반 송신 대기'
-        elif self._force_running:
-            mode, activity = 'Force RUN', '송수신'
         else:
             mode, activity = 'RUN', '송수신'
         self.label_mode.setText(mode)
@@ -507,10 +511,6 @@ class UserPanelWindow(QWidget):
         dialog.deleteLater()
         if self.dbc_signature != database_signature(self.main_window):
             self.main_window.open_user_panel()
-
-    def force_run(self):
-        if self._authorize_communication():
-            self.set_mode('run', force=True)
 
     def _check_init_connections(self):
         for index, step in enumerate(self.init_steps, 1):
@@ -866,10 +866,9 @@ class UserPanelWindow(QWidget):
         if hasattr(self.main_window, 'statusBar'):
             self.main_window.statusBar().showMessage(f'User panel TX: {exc}', 6000)
 
-    def _prepare_registered_packets(self, force=False):
-        init = [s for s in self.init_steps if s.get('kind') in ('START', 'STOP')] if force else self.init_steps
-        validate_steps(init, allow_empty=True)
-        validate_tool(self.tx_packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=init)))
+    def _prepare_registered_packets(self):
+        validate_steps(self.init_steps, allow_empty=True)
+        validate_tool(self.tx_packets, dict(behavior='tx', widget_type='sequence', binding=dict(sequence_steps=self.init_steps)))
         for cfg in self.widgets_config:
             validate_tool(self.tx_packets, cfg)
         runtimes = {}
@@ -921,10 +920,10 @@ class UserPanelWindow(QWidget):
                 runtimes[target['packet_id']].stage(target, target_value)
         self._packet_runtimes = runtimes
 
-    def set_mode(self, new_mode, force=False):
+    def set_mode(self, new_mode):
         if new_mode == 'standard':
             new_mode = 'standby'
-        if new_mode == self.mode and not force and not (new_mode == 'run' and self._force_running):
+        if new_mode == self.mode:
             return
 
         if new_mode == "edit" and self.mode != "edit":
@@ -937,11 +936,9 @@ class UserPanelWindow(QWidget):
         self.stop_panel_commands("모드 변경")
         if new_mode == 'run':
             try:
-                if not force:
-                    validate_steps(self.init_steps, actions_only=True, allow_empty=True)
-                self._prepare_registered_packets(force=force)
-                if not force:
-                    self._check_init_connections()
+                validate_steps(self.init_steps, actions_only=True, allow_empty=True)
+                self._prepare_registered_packets()
+                self._check_init_connections()
             except ValueError as exc:
                 self.mode = 'standby'
                 self.refresh_mode_ui()
@@ -949,24 +946,13 @@ class UserPanelWindow(QWidget):
                 self.log_system(f'RUN 시작 불가 / STANDARD: {exc}', 'ERROR')
                 return
         self.mode = new_mode
-        self._force_running = bool(force and new_mode == 'run')
-        self.log_system('Force RUN — INIT CMD/RCV/DEL 생략, START/STOP만 적용' if self._force_running
-                        else f"모드: {new_mode.upper() if new_mode != 'standby' else 'STANDARD'}")
+        self.log_system(f"모드: {new_mode.upper() if new_mode != 'standby' else 'STANDARD'}")
         if new_mode == 'run':
             self._paused_packets.clear()
-            self._init_running = bool(self.init_steps) and not force
-            self.init_control.setVisible(bool(self.init_steps) and not force)
-            if force:
-                for index, step in enumerate(self.init_steps, 1):
-                    if step.get('kind') in ('START', 'STOP'):
-                        targets = {p['packet_id'] for p in self.tx_packets} if step['target_packet_id'] == '*' else {step['target_packet_id']}
-                        if step['kind'] == 'STOP':
-                            self._paused_packets.update(targets)
-                        else:
-                            self._paused_packets.difference_update(targets)
-                        self.log_system(f"Force INIT {index}단계: {step['kind']} {step['target_packet_id']}")
+            self._init_running = bool(self.init_steps)
+            self.init_control.setVisible(bool(self.init_steps))
         self.refresh_mode_ui()
-        if new_mode == 'run' and self.init_steps and not force:
+        if new_mode == 'run' and self.init_steps:
             self.init_control.cfg['binding'] = dict(sequence_steps=copy.deepcopy(self.init_steps))
             self.init_control.show()
             self._update_mode_status()
@@ -975,7 +961,6 @@ class UserPanelWindow(QWidget):
     def stop_panel_commands(self, reason="패널 정지"):
         if self.mode == 'run':
             self.log_system(f'송신 정지: {reason}')
-        self._force_running = False
         self._init_running = False
         if hasattr(self, 'init_control'):
             self.init_control.stop(reason)
@@ -989,6 +974,8 @@ class UserPanelWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if hasattr(self, '_periodic_senders'):
+            self._sync_frame_timers_from_configs()
         if hasattr(self, '_bus_monitor'):
             self._bus_monitor.start()
             self._refresh_bus_status()
@@ -2014,7 +2001,8 @@ class UserPanelWindow(QWidget):
             initial_step = int(round((initial - min_v) / (max_v - min_v) * steps))
             slider.setValue(initial_step)
             initial = min_v + (max_v - min_v) * slider.value() / steps
-            value_label = QLabel(self._format_slider_value(binding, initial))
+            display_initial = quantize_value(binding, initial) if behavior == "tx" else initial
+            value_label = QLabel(self._format_slider_value(binding, display_initial))
             value_label.setObjectName("value_label")
             value_label.setAlignment(Qt.AlignCenter)
             title = QLabel(f"[{str(behavior).upper()}] {cfg.get('title', 'Widget')}")
@@ -2025,7 +2013,7 @@ class UserPanelWindow(QWidget):
             lay.addWidget(title, 0, 1)
             lay.addWidget(slider, 1, 1, 1, 2)
             lay.addWidget(value_label, 2, 1, 1, 2)
-            value_input = QLineEdit(self._format_slider_value(binding, initial))
+            value_input = QLineEdit(self._format_slider_value(binding, display_initial))
             value_input.setObjectName("slider_value_input")
             value_input.setMinimumWidth(40)
             value_input.setMaximumWidth(130)
@@ -2047,6 +2035,8 @@ class UserPanelWindow(QWidget):
             def _on_changed(v):
                 ratio = 0.0 if steps <= 0 else (v / float(steps))
                 phys = min_v + ((max_v - min_v) * ratio)
+                if behavior == "tx":
+                    phys = quantize_value(binding, phys)
                 value_label.setText(self._format_slider_value(binding, phys))
                 value_input.setText(self._format_slider_value(binding, phys))
                 if behavior == "tx":
@@ -2401,6 +2391,12 @@ class UserPanelWindow(QWidget):
         self._emit_tx(cfg, value)
 
     def _emit_tx(self, cfg, value):
+        with ExitStack() as locks:
+            for key in sorted(self._packet_runtimes):
+                locks.enter_context(self._packet_runtimes[key].lock)
+            self._emit_tx_locked(cfg, value)
+
+    def _emit_tx_locked(self, cfg, value):
         if self.mode != "run" or self._init_running or not self.isVisible() or cfg.get("behavior") != "tx":
             return
         try:
@@ -2466,9 +2462,66 @@ class UserPanelWindow(QWidget):
             except Exception:
                 pass
         self._frame_timers.clear()
+        for sender in self._periodic_senders.values():
+            sender.close()
+        self._periodic_senders.clear()
+        self._drain_periodic_events()
+        self._periodic_reported_missed.clear()
+
+    def hideEvent(self, event):
+        if hasattr(self, '_periodic_senders'):
+            self._stop_all_frame_timers()
+        super().hideEvent(event)
+
+    def stop_periodic_bus(self, bus):
+        for key, task in list(self._frame_timers.items()):
+            if task.runtime.packet['bus'] == bus:
+                task.stop()
+                self._frame_timers.pop(key, None)
+                self._paused_packets.add(key)
+        self._drain_periodic_events()
+
+    def _periodic_completed(self, task, payload, timestamp):
+        # Worker callback: no Qt widgets, decoding, file I/O or UI logging here.
+        try:
+            self._periodic_records.put_nowait((task, payload, timestamp, task.missed,
+                                               task.max_lateness_ms))
+        except queue.Full:
+            self._periodic_dropped_records += 1
+
+    def _drain_periodic_events(self):
+        while not self._periodic_errors.empty():
+            task, error = self._periodic_errors.get()
+            key = task.runtime.packet['packet_id']
+            if self._frame_timers.get(key) is task:
+                self._frame_timers.pop(key)
+                self._paused_packets.add(key)
+                self._report_packet_error(error)
+        for _ in range(500 if self._frame_timers else 20000):
+            try:
+                task, payload, timestamp, missed, max_lateness_ms = self._periodic_records.get_nowait()
+            except queue.Empty:
+                break
+            packet = task.runtime.packet
+            reported_missed = self._periodic_reported_missed.get(task, 0)
+            if missed > reported_missed:
+                self._periodic_reported_missed[task] = missed
+                self.log_system(
+                    f"TX 주기 지연: BUS {packet['bus']} / 0x{packet['id']:X}, "
+                    f"누락 {missed - reported_missed}회 (누적 {missed}), "
+                    f"최대 지연 {max_lateness_ms:.1f} ms",
+                    'WARN')
+            if hasattr(self.main_window, 'record_tx_activity'):
+                self.main_window.record_tx_activity(packet['bus'], packet['id'], payload,
+                                                    packet['is_fd'], timestamp)
+        if self._periodic_dropped_records:
+            self.log_system(f'화면 처리 지연으로 TX 기록 {self._periodic_dropped_records}개 생략 (송신은 계속됨)', 'WARN')
+            self._periodic_dropped_records = 0
+        if not self._frame_timers and self._periodic_records.empty():
+            self._periodic_monitor.stop()
 
     def _sync_frame_timers_from_configs(self):
-        if self.mode != "run" or self._init_running:
+        if self.mode != "run" or self._init_running or not self.isVisible():
             self._stop_all_frame_timers()
             return
         for packet in self.tx_packets:
@@ -2477,12 +2530,13 @@ class UserPanelWindow(QWidget):
                 continue
             if packet['cycle'] <= 0 or key in self._paused_packets or key in self._frame_timers:
                 continue
-            timer = QTimer(self)
-            timer.setTimerType(Qt.PreciseTimer)
-            timer.setInterval(packet['cycle'])
-            timer.timeout.connect(lambda key=key: self._flush_frame(key))
-            self._frame_timers[key] = timer
-            timer.start()
+            bus = packet['bus']
+            if bus not in self._periodic_senders:
+                self._periodic_senders[bus] = PeriodicSender(
+                    bus, self._periodic_completed,
+                    lambda task, error: self._periodic_errors.put((task, error)))
+            self._frame_timers[key] = self._periodic_senders[bus].add(self._packet_runtimes[key])
+            self._periodic_monitor.start()
 
     def _slider_steps(self, binding, min_v, max_v):
         resolution = float(binding.get("tx_resolution", 1.0))
@@ -2496,9 +2550,12 @@ class UserPanelWindow(QWidget):
         if msg and binding.get("signal_name"):
             try:
                 sig = msg.get_signal_by_name(binding["signal_name"])
+                scale = float(getattr(sig, "scale", binding.get("scale", 1.0)))
+                offset = float(getattr(sig, "offset", binding.get("offset", 0.0)))
+                decimals = max(decimals, self._resolution_decimals(scale), self._resolution_decimals(offset))
                 if (not getattr(sig, "is_float", False)
-                        and float(binding.get("scale", 1.0)).is_integer()
-                        and float(binding.get("offset", 0.0)).is_integer()):
+                        and scale.is_integer()
+                        and offset.is_integer()):
                     decimals = 0
             except KeyError:
                 pass
