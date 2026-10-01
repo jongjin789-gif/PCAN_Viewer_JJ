@@ -563,6 +563,11 @@ class UserPanelWindow(QWidget):
         menu_file.addAction(self.act_save_pkg)
         menu_file.addAction(self.act_load_pkg)
 
+        menu_comm = self.menu_bar.addMenu("통신")
+        self.act_open_communication = QAction("통신 설정 / DBC…", self)
+        self.act_open_communication.triggered.connect(self.open_communication)
+        menu_comm.addAction(self.act_open_communication)
+
         self.act_draw_rect = QAction("Draw Rect", self)
         self.act_draw_line = QAction("Draw Line", self)
         self.act_draw_cancel = QAction("Cancel Draw", self)

@@ -3,11 +3,12 @@ import copy
 import hashlib
 import os
 import platform
+import sys
 from pathlib import Path
 import uuid
 from types import SimpleNamespace
 
-from PyQt5.QtCore import QObject, QStandardPaths, Qt, QTimer
+from PyQt5.QtCore import QObject, Qt, QTimer
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 from src.session_storage import (EXTENSION, FORMAT, atomic_write, decode_db, encode_db,
@@ -32,8 +33,10 @@ class SessionManager(QObject):
     def __init__(self, main, storage_dir=None):
         super().__init__(main)
         self.main = main
-        base = storage_dir or os.path.join(
-            QStandardPaths.writableLocation(QStandardPaths.GenericDataLocation), 'PCAN_Viewer_JJ')
+        # 개인용 프로그램이므로 세션/설정 파일을 AppData가 아닌 실행 파일(또는 소스) 위치에 둔다.
+        base = storage_dir or (
+            os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
+            else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.directory = Path(base)
         self.autosave_path = self.directory / ('session' + EXTENSION)
         self.busy = False

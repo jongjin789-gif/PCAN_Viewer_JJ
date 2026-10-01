@@ -212,6 +212,16 @@ def build_executable():
             
     PyInstaller.__main__.run(build_args)
     
+    # 배포 모드(viewer_mode_only/user_panel_only) 전환용 설정 파일을 exe 옆에 배치
+    # (세션 매니저가 있으면 앱이 자동 생성하지 않으므로 빌드 시 직접 복사/생성한다)
+    dist_pk_path = os.path.join(dist_path, 'PCAN_Viewer_JJ.pk')
+    if os.path.exists(pk_path):
+        shutil.copy2(pk_path, dist_pk_path)
+    else:
+        with open(dist_pk_path, 'w', encoding='utf-8') as f:
+            json.dump({"viewer_mode_only": False, "user_panel_only": False}, f, indent=4)
+    print(f"[안내] PCAN_Viewer_JJ.pk 파일이 배포 폴더에 생성되었습니다.")
+
     # 배포 파일과 함께 최신 사용법 및 변경 내역 제공
     for document in ('MANUAL.md', 'USER_PANEL_SEQUENCE.md', 'USER_PANEL_RELEASE_NOTES.md'):
         document_path = os.path.join(current_dir, document)
