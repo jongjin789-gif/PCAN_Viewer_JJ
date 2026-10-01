@@ -1,23 +1,19 @@
-# Universal CAN Monitor (R008)
+# Universal CAN Monitor (R009)
 
-소스 폴더 이름은 `PCAN_Viewer_JJ_R007`을 유지하며, 아래 실행·빌드 명령은 이 폴더에서 수행합니다.
+아래 실행·빌드 명령은 프로젝트 루트 폴더에서 수행합니다.
 
-## R008 업데이트
+## R009 업데이트
 
-- 유저 패널 **sequence**: CMD/RCV/DEL 단계, 이름 입력, 단계 삽입·삭제·순서 변경, 상태별 버튼 색상과 로그.
-- DBC 없이도 시퀀스 CMD는 HEX/비트로, RCV는 `X/0/1` 비교 마스크로 편집·실행합니다.
-- 패널 닫기·모드 변경 시 패널의 모든 송신과 시퀀스 대기를 중단합니다. RUN 복귀 시 자동 재개하지 않습니다.
-- 패널 Classic/FD 및 BRS 선택: 8바이트 이하도 FD로 송신할 수 있습니다.
-- 같은 신호의 토글 상호 해제, 버튼·토글의 DBC 선택값 저장 오류 수정.
-- 슬라이더 Resolution 기반 숫자 표기, Initial Value 및 왼쪽 Home 버튼.
-- 격자 최소 32×32, 작은 창은 스크롤, 큰 창은 격자·도구 확대. 일반 도구 최소 Row Span 2.
-- 시퀀스 로그는 `현재순번/전체개수 종류 BUS CAN_ID 이름`으로 표시합니다. Standard ID는 3자리, Extended는 8자리입니다.
-- 로그 뷰어의 Extended ID 필터, 필터 결과만 재전송, **LOG → Save**로 원본 형식을 유지한 추출 저장과 메시지 번호 재부여.
-- 앱 전체 기본 글꼴 Consolas 적용. 한글 등 미지원 문자는 시스템 대체 글꼴로 표시됩니다.
+- 등록 패킷의 주기 송신을 BUS별 스레드로 처리하고, 지연/누락 주기를 시스템 로그에 표시합니다.
+- DBC counter에 최근 수신값 동기화 + 업/다운/왕복 fallback을 추가했습니다.
+- 실시간/통합 그래프에 최근 30초 Reset Zoom, Auto Y, Fit All Data를 제공합니다.
+- 시퀀스별 강제 실행(RCV 생략)과 패킷 제어(CMD/RCV 생략)를 제공합니다. 전역 Force RUN은 없습니다.
+- Linux는 이전 CAN 연결 상태와 관계없이 Close로 시작하고, 권한이 필요한 연결 명령에서만 비밀번호를 묻습니다.
+- INIT 영역 splitter 크기 조절, 슬라이더 레이아웃 및 로그 줄바꿈/가독성을 개선했습니다.
 
 상세 내용: [사용자 매뉴얼](MANUAL.md), [시퀀스 사용법](USER_PANEL_SEQUENCE.md), [변경 내역](USER_PANEL_RELEASE_NOTES.md).
 
-**Universal CAN Monitor**는 Python 및 PyQt5 기반으로 제작된 크로스 플랫폼 CAN 통신 모니터링 및 분석 도구입니다. Windows의 PCAN과 Linux의 SocketCAN 환경을 모두 완벽하게 지원하며, 데이터베이스(.dbc, .sym) 연동을 통한 실시간 시그널 디코딩 및 시계열 그래프 기능을 제공합니다.
+**Universal CAN Monitor**는 Python 및 PyQt5 기반의 CAN 통신 모니터링 및 분석 도구입니다. Windows PCAN과 Linux SocketCAN 실행 경로를 제공하며, 실제 하드웨어 지원은 OS 드라이버와 장비 환경 확인이 필요합니다. DBC/SYM 실시간 디코딩 및 시계열 그래프를 지원합니다.
 
 ---
 
@@ -27,23 +23,23 @@
 - **멀티 채널 모니터링**: 최대 3개의 CAN 버스 채널을 동시에 연결하고 모니터링 가능.
 - **CAN FD 지원**: Classic CAN 뿐만 아니라 CAN FD(Flexible Data-rate) 통신 및 ISO/Non-ISO, Data Bitrate 설정 지원.
 - **CAN 송신 (Tx) 및 패킷 관리**: 송신 패킷을 생성하여 CAN/FD 프레임 전송 가능. DBC 심볼과 연동하여 물리 값을 입력하면 자동으로 Raw Data(HEX) 연산 처리. Cycle Time 지원, 단축키(스페이스바 단발 전송, Ctrl+C/V 복사 붙여넣기, Delete 삭제) 지원, `.xmt` 파일 저장/불러오기 지원.
-- **자동 상태 저장 및 복구**: 프로그램 사용 중 연결한 CAN 하드웨어/속도, 등록된 데이터베이스 목록, 송신부 패킷 리스트가 `PCAN_Viewer_JJ.pk` 파일에 자동 저장되며 프로그램 재시작 시 이전 작업 상태를 완벽하게 복구 및 자동 연결.
+- **자동 상태 저장 및 복구**: 사용자 데이터 폴더의 통합 세션에 장치/속도, DB, 패킷, 그래프, 유저패널 구성을 저장합니다. Windows는 저장 당시 연결된 BUS를 재연결하고, Linux는 장치/속도만 복원한 뒤 BUS를 Close 상태로 시작합니다.
 - **데이터베이스(DBC/SYM) 연동**: `.dbc` 파일 및 PEAK `.sym` 파일(v5.0, v6.0)을 불러와 Raw CAN 데이터를 물리 값(Physical Value)으로 실시간 자동 변환. 메시지(부모) 체크박스를 통해 하위 시그널 일괄 선택/해제 기능 지원.
-- **실시간 그래프 렌더링**: pyqtgraph를 활용하여 트리에서 체크된 여러 시그널을 하나의 통합된 그래프에서 모니터링. **범례 순서 드래그 앤 드롭 변경, 선 색상 및 스타일 커스터마이징** 등 강화된 편집 기능 제공.
+- **실시간 그래프 렌더링**: Reset Zoom은 최근 30초, Auto Y는 현재 보이는 데이터, Fit All Data는 보관된 전체 구간을 표시합니다. 통합 그래프는 X축 범위를 공유합니다.
 - **데이터 로깅 (Record)**: 실시간으로 수신되는 메시지를 `.trc` (Trace) 파일 포맷으로 저장 기능 제공.
 - **TRC 로그 뷰어 (Log Viewer)**: 저장된 `.trc` 로그 파일을 오프라인에서 불러와 DBC/SYM 파일을 기준으로 재해석(Parsing)하여 분석할 수 있는 내장 뷰어 제공.
 - **독립 뷰어 모드 (Log Viewer Mode)**: `PCAN_Viewer_JJ.pk` 설정 파일의 `"viewer_mode_only"` 값을 `true`로 변경하여 하드웨어 연결 및 송신(Tx) 기능이 숨겨진 뷰어 전용 UI로 전환할 수 있습니다. (뷰어 모드 시 기존 패킷/설정 데이터 덮어쓰기 보호)
-- **타이틀 바 버전 표시**: main.py는 `build_exe.py`의 `APP_VERSION = "R008"`을 읽고, EXE는 실행 파일명에서 버전을 읽습니다. 소스 실행은 재실행만 하면 버전이 반영되고, 소스 변경을 EXE에 반영하려면 재빌드해야 합니다.
+- **타이틀 바 버전 표시**: 실행 파일명과 `build_exe.py`의 `APP_VERSION = "R009"`에서 버전을 확인합니다. 소스 변경은 재빌드해야 실행 파일에 반영됩니다.
 
 ---
 
 ## ⚙️ 시스템 요구 사항 및 설치 (Installation)
 
-R008 자동 테스트는 **Python 3.13** 환경에서 수행했습니다. 새 개발 환경도 Python 3.13을 기준으로 구성하세요.
+R009 자동 테스트는 **Python 3.13** 환경에서 수행합니다. 새 개발 환경도 Python 3.13을 기준으로 구성하세요.
 
 ### 🪟 Windows 환경
 1. **사전 준비**: PEAK-System PCAN 드라이버가 설치되어 있어야 합니다. (PCAN-USB 등 연결 필요)
-2. **의존성 패키지 자동 설치**: 프로젝트 폴더 내의 `install_windows.bat` 파일을 **관리자 권한으로 실행**합니다.
+2. **의존성 패키지 자동 설치**: 프로젝트 폴더 내의 `install_windows.bat` 파일을 실행합니다.
    - 자동으로 `venv_win` 가상환경이 생성되고 필요한 파이썬 패키지들이 한 번에 설치됩니다.
 
 ### 🐧 Linux (Ubuntu/Debian) 환경
@@ -65,19 +61,7 @@ chmod +x install_linux.sh
 1. **프로그램 실행**:
    - Windows: 터미널에서 `venv_win\Scripts\activate` 입력 후 `python main.py` 실행
    - Linux (가상 CAN): 터미널에서 `source venv_linux/bin/activate && python3 main.py` 실행
-   - Linux (실제 CAN): `ip link` 등 하드웨어 제어를 위해 root 권한이 필요합니다. `sudo`로 실행해야 합니다. 아래의 **권장 방식**을 사용하세요.
-
-     - **권장 방식 (가장 안정적)**:
-       - `sudo`는 보안상의 이유로 현재 사용자의 가상환경을 무시하고 시스템 기본 Python으로 스크립트를 실행하는 경우가 많습니다. 이로 인해 가상환경에 설치된 라이브러리(`cantools` 등)를 찾지 못하는 `ModuleNotFoundError`가 발생합니다.
-       - 이를 해결하는 가장 확실한 방법은 아래와 같이 **가상환경 내부의 파이썬 실행 파일을 명시적으로 지정**하여 `sudo`로 실행하는 것입니다.
-       - ```bash
-         sudo ./venv_linux/bin/python3 main.py
-         ```
-
-     - **대안 (시스템 설정에 따라 실패할 수 있음)**:
-       - `sudo -E` 옵션은 현재 사용자의 환경 변수(`PATH`, `VIRTUAL_ENV` 등)를 유지하면서 명령을 실행하려고 시도합니다.
-       - `source venv_linux/bin/activate && sudo -E python3 main.py`
-       - **주의**: 이 방식은 시스템의 `/etc/sudoers` 설정(특히 `secure_path`)에 따라 `PATH`가 초기화되어 실패할 수 있으므로 권장 방식만큼 신뢰성이 높지 않습니다.
+   - Linux (실제 CAN): 일반 사용자로 실행합니다. 인터페이스 설정에 권한이 필요하면 앱이 sudo 비밀번호를 묻고 해당 명령만 재시도합니다. 비밀번호는 실행 중 메모리에만 보관되며 파일이나 로그에는 저장하지 않습니다.
 
 2. **상세 사용법**:
    - 프로그램의 모든 기능에 대한 자세한 설명은 **MANUAL.md (사용자 매뉴얼)** 파일을 참고하세요.
@@ -127,13 +111,13 @@ chmod +x install_linux.sh
    python build_exe.py
    ```
 2. 빌드가 성공적으로 완료되면 프로젝트 폴더 내 `dist` 디렉토리 하위에 플랫폼별 배포 폴더가 생성됩니다.
-   - Windows: `dist/PCAN_Viewer_JJ_R008_win/PCAN_Viewer_JJ_R008_win.exe`
-   - Linux: `dist/PCAN_Viewer_JJ_R008_linux/PCAN_Viewer_JJ_R008_linux` (리눅스용 README 파일 포함)
+   - Windows: `dist/PCAN_Viewer_JJ_R009_win/PCAN_Viewer_JJ_R009_win.exe`
+   - Linux: `dist/PCAN_Viewer_JJ_R009_linux/PCAN_Viewer_JJ_R009_linux` (리눅스용 README 파일 포함)
 
-3. 새로 생성된 R008 배포 폴더의 실행 파일을 실행합니다. 기존 R007 실행 파일은 소스 수정만으로 갱신되지 않습니다.
+3. 새로 생성된 R009 배포 폴더의 실행 파일을 실행합니다. 이전 실행 파일은 소스 수정만으로 갱신되지 않습니다.
 4. 배포 폴더에는 `MANUAL.md`, `USER_PANEL_SEQUENCE.md`, `USER_PANEL_RELEASE_NOTES.md`와 OS별 실행 안내가 포함됩니다.
 5. 패널의 **Save**로 시퀀스·도구 설정을 별도로 저장하세요. 실행 로그와 실행 중 상태는 패널 파일에 저장되지 않습니다.
 
-검증 명령: `python -B -m unittest discover -s tests`. 현재 자동 테스트 16개 통과 기준이며, 실제 CAN 장비 검증과 R008 배포 바이너리 검증은 별도입니다.
+검증 명령: `python -B -m unittest discover -s tests`. 실제 CAN 장비 검증과 OS별 R009 배포 바이너리 검증은 별도로 수행해야 합니다.
 
 *(빌드 스크립트는 PCANBasic.dll 및 아이콘 파일 등 필요 리소스들을 실행 파일 내부에 자동으로 함께 패키징하도록 설계되어 있습니다.)*

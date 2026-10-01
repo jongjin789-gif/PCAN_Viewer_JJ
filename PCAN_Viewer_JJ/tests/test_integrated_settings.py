@@ -208,6 +208,32 @@ class IntegratedSettingsTest(unittest.TestCase):
         self.assertEqual(saved['can']['1']['data_bitrate'], '2 MBit/s')
         self.assertFalse(saved['can']['1']['is_open'])
 
+    def test_linux_session_restore_keeps_saved_socketcan_channel_closed(self):
+        channel = dict(bustype='socketcan', handle='vcan0', is_fd=True)
+        combo = self.main.combo_channels[1]
+        combo.addItem('vcan0', channel)
+        saved_cfg = dict(device=dict(bustype='socketcan', handle='vcan0'), channel='vcan0',
+                         bitrate=self.main.combo_bitrate[1].currentText(),
+                         fd_iso=self.main.combo_fd_iso[1].currentText(), data_bitrate='Off',
+                         is_open=True)
+
+        platform_patch = patch('src.session_manager.platform.system', return_value='Linux')
+        open_can_patch = patch.object(self.main, 'open_can')
+        platform_patch.start()
+        open_can = open_can_patch.start()
+        self.addCleanup(platform_patch.stop)
+        self.addCleanup(open_can_patch.stop)
+        try:
+            self.session.errors = []
+            self.session.apply_can(1, saved_cfg)
+        finally:
+            open_can_patch.stop()
+            platform_patch.stop()
+
+        open_can.assert_not_called()
+        self.assertIsNone(self.main.buses[1])
+        self.assertFalse(self.session.errors)
+
     def test_empty_replaces_and_closes_log_and_stops_everything(self):
         empty = self.session.capture()
         self.db()

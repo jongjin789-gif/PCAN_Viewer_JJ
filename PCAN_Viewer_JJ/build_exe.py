@@ -16,7 +16,7 @@ except ImportError:
 # =====================================================================
 # 소프트웨어 버전 설정 (빌드 시 생성되는 실행 파일명에 반영됩니다)
 # =====================================================================
-APP_VERSION = "R008"
+APP_VERSION = "R009"
 
 def _collect_hidden_imports():
     """
@@ -246,17 +246,17 @@ chmod +x {app_prefix}_{APP_VERSION}_linux
 ```
 
 ## ⚠️ 3. (중요) 실제 CAN 하드웨어 사용 시
-실제 CAN 장비(예: `can0`)에 연결하려면 `ip link` 명령어를 실행하기 위한 root 권한이 필요할 수 있습니다.
-프로그램 내부에서 권한이 없을 경우 안내 메시지가 표시되지만, 처음부터 권한을 부여하여 실행하는 것이 더 편리할 수 있습니다.
-
-```bash
-sudo ./{app_prefix}_{APP_VERSION}_linux
-```
+일반 사용자로 프로그램을 실행하세요. 인터페이스 설정에 권한이 필요한 경우에만 앱에서 sudo 비밀번호를 묻습니다.
+비밀번호는 현재 실행 중에만 사용하며 파일이나 로그에 저장하지 않습니다. CAN 세션은 이전 저장 상태와 관계없이 Close로 시작합니다.
 
 ## {APP_VERSION} 기능 및 사용 안내
 - User Panel: Add TX Tool → sequence → 명령 시퀀스 설정에서 CMD/RCV/DEL을 등록합니다.
 - DBC 없이 저장된 CMD 데이터와 RCV 비트 조건을 수정·실행할 수 있습니다.
+- sequence Force는 RCV를 건너뛰고, Packet Control은 CMD/RCV를 제외해 START/STOP/DEL만 실행합니다. 전역 Force RUN 모드는 없습니다.
+- TX counter에서 최신 RX DBC raw값 동기화와 업/다운/왕복 fallback을 선택할 수 있습니다.
+- 실시간 그래프: Reset Zoom(최근 30초), Auto Y(표시 중인 구간), Fit All Data(보관 구간).
 - 패널 닫기·모드 변경 시 패널 송신과 대기를 모두 중지합니다.
+- 양수 주기의 등록 패킷은 BUS별 스레드에서 전송하며, deadline 누락은 시스템 로그에 표시합니다. 실제 주기 성능은 하드웨어/드라이버에서 확인해야 합니다.
 - 패널 FD/BRS, 슬라이더 Home, 최소 격자와 창 확대 동작을 지원합니다.
 - LOG 탭: Extended ID 필터, 필터 결과 재전송, Save로 원본 형식 추출 저장을 지원합니다.
 - 상세 사용법: MANUAL.md / USER_PANEL_SEQUENCE.md / USER_PANEL_RELEASE_NOTES.md.
@@ -280,6 +280,8 @@ sudo ./{app_prefix}_{APP_VERSION}_linux
 [{APP_VERSION} 기능 및 사용 안내]
 - User Panel: Add TX Tool → sequence → 명령 시퀀스 설정에서 CMD/RCV/DEL을 등록합니다.
 - DBC 없이 CMD 데이터와 RCV 비트 조건을 수정·실행하며, 패널 Save에 함께 저장됩니다.
+- sequence Force/Packet Control은 각 sequence 도구에서 실행하며, 전역 Force RUN 모드는 없습니다.
+- TX counter의 RX 동기화 모드, 그래프 Reset Zoom/Auto Y/Fit All Data, BUS별 주기 송신 진단을 포함합니다.
 - 패널 닫기·모드 변경 시 패널의 모든 송신과 대기를 중지합니다.
 - 패널 FD/BRS, 슬라이더 Home, 최소 격자와 창 확대 동작을 지원합니다.
 - LOG 탭: Extended ID 필터, 필터 결과 재전송, Save로 원본 형식 추출 저장을 지원합니다.

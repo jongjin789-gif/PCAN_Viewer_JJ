@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import os
+import platform
 from pathlib import Path
 import uuid
 from types import SimpleNamespace
@@ -359,7 +360,8 @@ class SessionManager(QObject):
                 widget.setCurrentIndex(widget.count() - 1)
             else:
                 widget.setCurrentIndex(i)
-        if not errors and cfg['is_open']:
+        reconnect = cfg['is_open'] and platform.system() != 'Linux'
+        if not errors and reconnect:
             try:
                 m.open_can(bus)
             except Exception as exc:

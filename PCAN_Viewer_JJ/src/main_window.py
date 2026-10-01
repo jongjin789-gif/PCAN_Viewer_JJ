@@ -40,6 +40,7 @@ class UniversalCANMonitor(QMainWindow):
         self.user_panel_only = bool(user_panel_only)
         self.viewer_only = bool(viewer_only and not user_panel_only)
         self.communication_password = communication_password
+        self._linux_sudo_password = ''
         self._pending_panel_events = []
         self.user_panel_security = user_panel_security or {"enabled": False, "password": ""}
         
@@ -182,7 +183,7 @@ class UniversalCANMonitor(QMainWindow):
             
             row_layout.addStretch()
             conn_layout.addLayout(row_layout)
-            
+
         conn_group.setLayout(conn_layout)
         main_layout.addWidget(conn_group)
         conn_group.setVisible(not self.viewer_only)
@@ -1033,9 +1034,14 @@ class UniversalCANMonitor(QMainWindow):
             
             # vcan(가상 CAN)이 아닌 실제 하드웨어 CAN의 경우 ip link 설정 수행
             if not channel_handle.startswith('vcan'): # 실제 CAN 하드웨어
-                # 인터페이스 설정을 위해 먼저 down -> up을 시도합니다. (sudo 없이)
-                # 권한이 없는 경우, 사용자가 직접 터미널에서 실행하도록 안내합니다.
-                subprocess.run(['ip', 'link', 'set', channel_handle, 'down'], stderr=subprocess.DEVNULL)
+                down_cmd = ['ip', 'link', 'set', channel_handle, 'down']
+                down_result = self._run_linux_ip_command(down_cmd)
+                if down_result is None:
+                    return
+                if down_result.returncode != 0:
+                    self.notify_connection_error("CAN 인터페이스 설정 오류",
+                                                 f"{' '.join(down_cmd)}\n{down_result.stderr.strip()}")
+                    return
                 
                 ip_cmd = ['ip', 'link', 'set', channel_handle, 'up', 'type', 'can', 'bitrate', str(bitrate)]
                 if fd_enabled and dbitrate:
@@ -1044,40 +1050,29 @@ class UniversalCANMonitor(QMainWindow):
                 else:
                     ip_cmd.extend(['fd', 'off'])
                     
-                res = subprocess.run(ip_cmd, capture_output=True, text=True)
+                res = self._run_linux_ip_command(ip_cmd)
+                if res is None:
+                    return
                 if res.returncode != 0:
-                    is_root = False
                     try:
-                        is_root = (os.geteuid() == 0)
-                    except AttributeError: # Non-Linux
-                        pass
-
-                    if is_root:
-                        # root 권한으로 실행했음에도 실패한 경우 (예: 존재하지 않는 인터페이스)
-                        self.notify_connection_error("명령 실행 오류",
-                                              f"CAN 인터페이스 '{channel_handle}' 설정 중 오류가 발생했습니다.\n"
-                                              f"인터페이스 이름이 정확한지 확인해주세요.\n\n"
-                                              f"실행된 명령어: {' '.join(ip_cmd)}\n"
-                                              f"에러: {res.stderr.strip()}")
-                        return
-                    else:
-                        # root 권한이 없어 실패한 경우, sudo로 실행하도록 안내
-                        sudo_cmd_str = f"sudo ip link set {channel_handle} down && sudo {' '.join(ip_cmd)}"
-                        self.notify_connection_error("권한 필요",
-                                              f"CAN 인터페이스 '{channel_handle}' 설정에 실패했습니다.\n"
-                                              "이 작업은 일반적으로 root 권한이 필요합니다.\n\n"
-                                              "프로그램을 'sudo'로 다시 시작하거나,\n"
-                                              "아래 명령어를 터미널에 복사하여 실행한 후 다시 시도해 주세요:\n"
-                                              f"<code>{sudo_cmd_str}</code>")
-                        return
+                        is_root = os.geteuid() == 0
+                    except AttributeError:
+                        is_root = False
+                    title = "명령 실행 오류" if is_root else "sudo 인증 실패"
+                    self.notify_connection_error(
+                        title,
+                        f"CAN 인터페이스 '{channel_handle}' 설정에 실패했습니다.\n"
+                        f"실행된 명령어: {' '.join(ip_cmd)}\n오류: {res.stderr.strip()}")
+                    return
             else: # vcan (가상 CAN)
                 # vcan은 일반적으로 sudo 없이도 up 가능하지만, 실패 시 안내
-                res = subprocess.run(['ip', 'link', 'set', channel_handle, 'up'], capture_output=True, text=True)
+                res = self._run_linux_ip_command(['ip', 'link', 'set', channel_handle, 'up'])
+                if res is None:
+                    return
                 if res.returncode != 0:
                     self.notify_connection_error("권한 오류 가능성",
                                           f"가상 CAN 인터페이스 '{channel_handle}' 활성화에 실패했습니다.\n"
-                                          "터미널에서 아래 명령어를 실행한 후 다시 시도해 주세요:\n"
-                                          f"<code>sudo ip link set {channel_handle} up</code>")
+                                          f"{res.stderr.strip()}")
                     return
 
             # python-can 객체 생성 (SocketCAN 기반)
@@ -1115,6 +1110,32 @@ class UniversalCANMonitor(QMainWindow):
         except Exception as e:
             self.close_can(bus_num)
             self.notify_connection_error("Error", f"Failed to open Linux CAN channel for Bus {bus_num}:\n{str(e)}")
+
+    def _run_linux_ip_command(self, command):
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode == 0:
+            return result
+        try:
+            is_root = os.geteuid() == 0
+        except AttributeError:
+            return result
+        if is_root:
+            return result
+        error_text = f'{result.stderr}\n{result.stdout}'.lower()
+        if 'operation not permitted' not in error_text and 'permission denied' not in error_text:
+            return result
+
+        password = self._linux_sudo_password
+        if not password:
+            password, accepted = QInputDialog.getText(
+                self, 'sudo 인증', 'CAN 인터페이스 설정을 위한 sudo 비밀번호:', QLineEdit.Password)
+            if not accepted or not password:
+                return None
+
+        elevated = subprocess.run(['sudo', '-S', '-p', '', '--', *command],
+                                  input=password + '\n', capture_output=True, text=True)
+        self._linux_sudo_password = password if elevated.returncode == 0 else ''
+        return elevated
 
     def close_can(self, bus_num=None):
         """채널 닫기 및 초기화"""

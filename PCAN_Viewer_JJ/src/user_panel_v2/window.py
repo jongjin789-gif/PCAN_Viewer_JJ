@@ -2062,6 +2062,7 @@ class UserPanelWindow(QWidget):
                 if behavior == "tx":
                     phys = quantize_value(binding, phys)
                 value_label.setText(self._format_slider_value(binding, phys))
+                value_input.setText(self._format_slider_value(binding, phys))
                 if behavior == "tx":
                     self._emit_tx(cfg, command_value if cfg.get('tx_commands') else phys)
 
@@ -2073,6 +2074,7 @@ class UserPanelWindow(QWidget):
                 finally:
                     slider.blockSignals(was_blocked)
                 value_label.setText(self._format_slider_value(binding, display_initial))
+                value_input.setText(self._format_slider_value(binding, display_initial))
                 if behavior == "tx":
                     self._emit_tx(dict(cfg, _slider_home=True), initial)
             home.clicked.connect(_home)
@@ -2082,7 +2084,10 @@ class UserPanelWindow(QWidget):
                     if not math.isfinite(value):
                         raise ValueError('Non-finite value')
                 except ValueError:
-                    _home()
+                    if slider.value() != initial_step:
+                        slider.setValue(initial_step)
+                    else:
+                        _on_changed(initial_step)
                     return
                 value = max(min_v, min(max_v, value))
                 target = int(round((value - min_v) / (max_v - min_v) * steps))
@@ -2749,6 +2754,7 @@ class UserPanelWindow(QWidget):
             if isinstance(ctrl, QWidget):
                 slider = ctrl.findChild(QSlider, "slider")
                 value_label = ctrl.findChild(QLabel, "value_label")
+                value_input = ctrl.findChild(QLineEdit, "slider_value_input")
                 if slider is not None:
                     steps = max(1, int(slider.maximum()))
                     ratio = 0.0 if max_v == min_v else (v - min_v) / (max_v - min_v)
@@ -2758,6 +2764,8 @@ class UserPanelWindow(QWidget):
                     slider.blockSignals(False)
                     if value_label is not None:
                         value_label.setText(self._format_slider_value(binding, v))
+                    if value_input is not None:
+                        value_input.setText(self._format_slider_value(binding, v))
             return
 
         if wtype == "spinbox":
