@@ -67,6 +67,26 @@ class PanelPagesTest(unittest.TestCase):
         self.assertEqual(slider.value(), 37)
         self.assertFalse(panel.btn_add_page.isEnabled())
 
+    def test_editor_panels_and_page_actions_are_edit_mode_only(self):
+        panel = self.panel(dict(widgets=[self.cfg('s')]))
+        self.assertFalse(panel.tool_list_panel.isHidden())
+        self.assertFalse(panel.property_edit_panel.isHidden())
+        self.assertFalse(panel.btn_add_page.isHidden())
+        self.assertFalse(panel.btn_rename_page.isHidden())
+
+        panel.set_mode('run')
+        self.assertTrue(panel.tool_list_panel.isHidden())
+        self.assertTrue(panel.property_edit_panel.isHidden())
+        self.assertTrue(panel.btn_add_page.isHidden())
+        self.assertTrue(panel.btn_rename_page.isHidden())
+        self.assertFalse(panel.page_tabs.isHidden())
+
+        panel.set_mode('edit')
+        self.assertFalse(panel.tool_list_panel.isHidden())
+        self.assertFalse(panel.property_edit_panel.isHidden())
+        self.assertFalse(panel.btn_add_page.isHidden())
+        self.assertFalse(panel.btn_rename_page.isHidden())
+
     def test_copy_between_pages_and_undo(self):
         panel = self.panel(dict(widgets=[self.cfg('s')]))
         panel.selected_widget_id = 's'

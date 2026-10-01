@@ -88,6 +88,7 @@ class SequenceControl(QWidget):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(4)
         self.button = QPushButton()
+        self.button.setIconSize(QSize(24, 24))
         self.button.clicked.connect(lambda: self.toggle())
         self.force_button = QToolButton()
         self.force_button.setIcon(QIcon(get_resource_path('icon/panel/force.svg')))
@@ -103,9 +104,24 @@ class SequenceControl(QWidget):
             'QToolButton { background:#fff3db; border:1px solid #d79b34; border-radius:3px; padding:0; } '
             'QToolButton:hover { background:#ffe3ad; }')
         self.force_button.clicked.connect(lambda: self.force_toggle())
+        self.packet_button = QToolButton()
+        self.packet_button.setIcon(QIcon(get_resource_path('icon/panel/packet_control.svg')))
+        self.packet_button.setIconSize(QSize(force_icon_size, force_icon_size))
+        self.packet_button.setToolTip('패킷 제어 (START / STOP / DELAY만 실행, CMD·RCV 제외)')
+        self.packet_button.setAccessibleName('패킷 제어')
+        self.packet_button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.packet_button.setFixedWidth(force_button_width)
+        self.packet_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.packet_button.setStyleSheet(
+            'QToolButton { background:#e3f5f7; border:1px solid #2194a4; border-radius:3px; padding:0; } '
+            'QToolButton:hover { background:#bfe9ee; }')
+        self.packet_button.clicked.connect(lambda: self.toggle(packet_only=True))
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setStyleSheet("background:white; color:black;")
+        log_font = self.log.font()
+        log_font.setPointSize(max(7, log_font.pointSize() - 2))
+        self.log.setFont(log_font)
         self.log.document().setMaximumBlockCount(2000)
         clear = QAction("로그 지우기", self.log)
         clear.triggered.connect(self.log.clear)
@@ -113,12 +129,18 @@ class SequenceControl(QWidget):
         self.log.setContextMenuPolicy(Qt.ActionsContextMenu)
         actions.addWidget(self.button, 1)
         actions.addWidget(self.force_button)
+        actions.addWidget(self.packet_button)
         layout.addLayout(actions)
         layout.addWidget(self.log, 1)
         self._state("ready", "실행")
 
     def _state(self, state, label):
         self.button.setText(f"{self.cfg.get('title', 'Sequence')} · {label}")
+        active = state in ('run', 'receive', 'delay')
+        icon_path = 'icon/graph_controls/stop.svg' if active else 'icon/panel/run.svg'
+        self.button.setIcon(QIcon(get_resource_path(icon_path)))
+        self.button.setToolTip('시퀀스 정지' if active else '시퀀스 실행 (RCV 응답 확인)')
+        self.button.setAccessibleName(self.button.toolTip())
         color = "black" if state == "receive" else "white"
         self.button.setStyleSheet(f"background:{self.COLORS[state]}; color:{color}; padding:4px;")
 
@@ -163,9 +185,6 @@ class SequenceControl(QWidget):
             return
         if self.owner.mode != 'run':
             return
-        authorize = getattr(self.owner, '_authorize_communication', None)
-        if authorize is not None and not authorize():
-            return
         self.toggle(force_rcv_skip=True)
 
     def fail(self, message):
@@ -200,7 +219,7 @@ class SequenceControl(QWidget):
             except ValueError as exc:
                 self.fail(str(exc))
 
-    def toggle(self, force_rcv_skip=False):
+    def toggle(self, force_rcv_skip=False, packet_only=False):
         if self.running:
             self.stop()
             return
@@ -217,6 +236,13 @@ class SequenceControl(QWidget):
             if force_rcv_skip:
                 self.steps = [step for step in self.steps if step.get('kind') != 'RCV']
             failures = copy.deepcopy(self.cfg.get('binding', {}).get('sequence_failure_steps', []))
+            if packet_only:
+                allowed = ('START', 'STOP', 'DEL')
+                self.steps = [step for step in self.steps if step.get('kind') in allowed]
+                failures = [step for step in failures if step.get('kind') in allowed]
+                if not any(step.get('kind') in ('START', 'STOP') for step in self.steps):
+                    self.write('패킷 제어: START·STOP 단계가 없어 실행하지 않습니다.')
+                    return
             validate_steps(self.steps, allow_empty=force_rcv_skip)
             validate_steps(failures, actions_only=True, allow_empty=True)
             if hasattr(self.owner, 'tx_packets'):
@@ -241,7 +267,11 @@ class SequenceControl(QWidget):
         self.last_receive = "수신 없음"
         if force_rcv_skip:
             self.write(f'강제 실행: RCV {skipped_receives}단계 건너뜀')
-        self.write("--- 강제 시퀀스 시작 ---" if force_rcv_skip else "--- 시퀀스 시작 ---")
+        if packet_only:
+            self.write('--- 패킷 제어 실행: CMD·RCV 제외 (실패 처리 포함) ---')
+        else:
+            self.write("--- 강제 시퀀스 시작 ---" if force_rcv_skip else "--- 시퀀스 시작 ---")
+        self._state('run', '패킷 제어 중 · 정지' if packet_only else '실행 중 · 정지')
         self.watchdog.start()
         self._next()
 

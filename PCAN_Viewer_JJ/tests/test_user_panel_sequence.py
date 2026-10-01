@@ -41,6 +41,11 @@ class SequenceTest(unittest.TestCase):
         self.assertEqual([s['name'] for s in editor.steps], ['First'])
         self.assertEqual(editor.table.verticalHeaderItem(0).text(), '▶ 1')
 
+    def test_sequence_log_uses_compact_font(self):
+        control = SequenceControl(SimpleNamespace(), dict(title='Test', binding={}))
+        self.addCleanup(control.deleteLater)
+        self.assertEqual(control.log.font().pointSize(), max(7, self.app.font().pointSize() - 2))
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])

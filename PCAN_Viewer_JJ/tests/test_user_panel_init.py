@@ -69,6 +69,31 @@ class InitSequenceTest(unittest.TestCase):
         QTest.qWait(30)
         self.assertIn(p['id'], [m.arbitration_id for m in self.sent])
 
+    def test_init_sequence_panel_is_in_resizable_vertical_splitter(self):
+        panel = self.make_panel([], [dict(kind='DEL', delay_ms=1000)])
+        panel.resize(1200, 900)
+        panel.set_mode('run')
+        self.app.processEvents()
+
+        splitter = panel.workspace_splitter
+        self.assertIs(splitter.widget(0), panel.init_control)
+        self.assertTrue(panel.init_control.isVisible())
+        self.assertGreater(panel.init_control.maximumHeight(), 150)
+        splitter.setSizes([210, 500, 140])
+        self.app.processEvents()
+        self.assertGreaterEqual(splitter.sizes()[0], 190)
+        self.assertTrue(splitter.isCollapsible(0))
+
+    def test_init_sequence_panel_hides_when_leaving_run(self):
+        panel = self.make_panel([], [dict(kind='DEL', delay_ms=1000)])
+        panel.set_mode('run')
+        self.assertTrue(panel.init_control.isVisible())
+
+        panel.set_mode('edit')
+
+        self.assertTrue(panel.init_control.isHidden())
+        self.assertFalse(panel._init_running)
+
     def test_init_cmd_start_stop_order_and_run_reentry(self):
         p = packet()
         panel = self.make_panel([p], [action('STOP'), dict(kind='CMD', packet=p),

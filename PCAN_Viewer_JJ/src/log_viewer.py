@@ -1,3 +1,4 @@
+from src.error_dialog import show_error
 import os
 import re
 import can
@@ -236,7 +237,8 @@ class LogViewerWindow(QMainWindow):
         if self._is_closing:
             return
         self.progress.close()
-        QMessageBox.critical(self, "Parse Error", f"Failed to parse log file:\n{err_msg}")
+        show_error(self, "Parse Error", f"Failed to parse log file:\n{err_msg}",
+                   details=getattr(self.parser_thread, "last_error_details", None))
 
     def populate_log_table(self):
         self.log_table.setRowCount(0)
@@ -398,7 +400,7 @@ class LogViewerWindow(QMainWindow):
             count = self.export_filtered_log(path, logs)
             QMessageBox.information(self, "Save", f"{count}개 메시지를 저장했습니다.")
         except Exception as exc:
-            QMessageBox.critical(self, "Save", str(exc))
+            show_error(self, "Save", str(exc))
 
     def export_filtered_log(self, path, logs=None):
         logs = self.get_visible_log_data() if logs is None else logs
@@ -576,7 +578,7 @@ class LogViewerWindow(QMainWindow):
 
             QTimer.singleShot(200, lambda: self.clear_row_highlight(selected_row))
         except Exception as e:
-            QMessageBox.critical(self, "전송 오류", f"선택된 로그를 전송하는 중 오류가 발생했습니다:\n{e}")
+            show_error(self, "전송 오류", f"선택된 로그를 전송하는 중 오류가 발생했습니다:\n{e}")
             self.clear_row_highlight(selected_row)
 
     def clear_row_highlight(self, row):

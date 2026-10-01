@@ -1,3 +1,4 @@
+from src.error_dialog import show_error
 import os
 import re
 import datetime
@@ -1370,7 +1371,7 @@ class TxPanel(QWidget):
             with open(file_path, 'w', encoding='utf-8') as f: f.write("\n".join(lines))
             QMessageBox.information(self, "Saved", "성공적으로 저장되었습니다.")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"저장 중 오류 발생:\n{e}")
+            show_error(self, "Error", f"저장 중 오류 발생:\n{e}")
 
     def on_load_packets(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open XMT File", "", "XMT Files (*.xmt)")
@@ -1477,7 +1478,7 @@ class TxPanel(QWidget):
             self.auto_save_packets()
                 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"불러오기 중 오류 발생:\n{e}")
+            show_error(self, "Error", f"불러오기 중 오류 발생:\n{e}")
 
     def get_pk_path(self):
         if getattr(sys, 'frozen', False):

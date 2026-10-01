@@ -1,6 +1,7 @@
 """Bounded system events shared by panel controls and CAN operations."""
 from datetime import datetime
 import time
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit, QFileDialog, QApplication
 
 
@@ -30,10 +31,11 @@ class SystemLog(QWidget):
         now = time.monotonic()
         if key == self._last and now - self._time < 2:
             self._count += 1
-            cursor = self.text.textCursor()
-            cursor.movePosition(cursor.End)
-            cursor.select(cursor.BlockUnderCursor)
+            block = self.text.document().lastBlock()
+            cursor = QTextCursor(block)
+            cursor.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
             cursor.insertText(self._line + f' (반복 {self._count}회)')
+            self.text.setTextCursor(cursor)
             return
         self._last, self._time, self._count = key, now, 1
         stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

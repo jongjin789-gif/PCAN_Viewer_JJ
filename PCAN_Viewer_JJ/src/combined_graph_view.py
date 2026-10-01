@@ -1,3 +1,4 @@
+from src.error_dialog import show_error
 import sys
 import os
 import datetime
@@ -6,6 +7,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 import pyqtgraph as pg
+from src.graph_toolbar import graph_button, graph_toolbar
 from src.utils import get_resource_path
 
 class CombinedGraphView(QWidget):
@@ -16,6 +18,8 @@ class CombinedGraphView(QWidget):
         self.parent_window = parent_window
         self.original_parents = {} # 그래프 컨테이너의 원래 부모 위젯을 저장
         self.proxies = [] # 마우스 이동 시그널 프록시를 저장하여 연결 해제에 사용
+        self._xrange_slots = []
+        self._syncing_xrange = False
         self.parent_is_closing = False # 부모 창이 닫히고 있는지 여부를 나타내는 플래그
 
         self.setWindowTitle("Combined Synchronized View")
@@ -29,19 +33,27 @@ class CombinedGraphView(QWidget):
         main_layout = QVBoxLayout(self)
 
         # --- 상단 컨트롤 패널 ---
-        top_ctrl_layout = QHBoxLayout()
         
-        self.btn_reset_zoom = QPushButton("Reset Zoom")
-        self.chk_crosshair = QCheckBox("Show Crosshair")
+        self.btn_start = graph_button(self, "START", "start")
+        self.btn_stop = graph_button(self, "STOP", "stop")
+        self.btn_reset_zoom = graph_button(self, "Reset Zoom", "reset_zoom")
+        self.btn_fit_all_data = graph_button(self, "Fit All Data", "fit_all")
+        self.chk_crosshair = graph_button(self, "Show Crosshair", "crosshair", checkable=True)
         self.chk_crosshair.setChecked(True)
-        self.btn_clear_tags = QPushButton("Clear All Tags")
-        self.btn_screenshot = QPushButton("Screenshot")
+        self.btn_clear_tags = graph_button(self, "Clear All Tags", "clear_tags")
+        self.btn_screenshot = graph_button(self, "Screenshot", "screenshot")
 
-        top_ctrl_layout.addWidget(self.btn_reset_zoom)
-        top_ctrl_layout.addStretch()
-        top_ctrl_layout.addWidget(self.chk_crosshair)
-        top_ctrl_layout.addWidget(self.btn_clear_tags)
-        top_ctrl_layout.addWidget(self.btn_screenshot)
+        groups = [
+            [self.btn_reset_zoom, self.btn_fit_all_data],
+            [self.chk_crosshair, self.btn_clear_tags],
+            [self.btn_screenshot],
+        ]
+        if self._realtime_graphs():
+            groups.insert(0, [self.btn_start, self.btn_stop])
+        else:
+            self.btn_start.hide()
+            self.btn_stop.hide()
+        top_ctrl_layout = graph_toolbar(self, groups)
         main_layout.addLayout(top_ctrl_layout)
 
         # --- 그래프들을 담을 스크롤 영역 ---
@@ -55,10 +67,28 @@ class CombinedGraphView(QWidget):
         main_layout.addWidget(scroll_area)
 
         # --- 이벤트 연결 ---
+        self.btn_start.clicked.connect(lambda: self.set_graphs_playing(True))
+        self.btn_stop.clicked.connect(lambda: self.set_graphs_playing(False))
+        self.update_playback_buttons()
         self.btn_reset_zoom.clicked.connect(self.do_reset_zoom)
+        self.btn_fit_all_data.clicked.connect(self.do_fit_all_data)
         self.chk_crosshair.toggled.connect(self.do_toggle_crosshair)
         self.btn_clear_tags.clicked.connect(self.do_clear_tags)
         self.btn_screenshot.clicked.connect(self.do_screenshot)
+
+    def _realtime_graphs(self):
+        return [graph for graph in self.graphs
+                if callable(getattr(graph, '_set_playing_state', None))]
+
+    def update_playback_buttons(self):
+        graphs = self._realtime_graphs()
+        self.btn_start.setEnabled(any(not graph.is_playing for graph in graphs))
+        self.btn_stop.setEnabled(any(graph.is_playing for graph in graphs))
+
+    def set_graphs_playing(self, playing):
+        for graph in self._realtime_graphs():
+            graph._set_playing_state(playing, sync=False)
+        self.update_playback_buttons()
 
     def reparent_graphs(self):
         """원본 그래프 창에서 그래프 위젯을 가져와 통합 뷰에 재배치합니다."""
@@ -78,10 +108,12 @@ class CombinedGraphView(QWidget):
             return
 
         # --- 내부 그래프 간 X축 및 마우스 이동 동기화 설정 ---
-        # 1. X축 연결 (줌/이동 동기화)
-        master_vb = self.graphs[0].plot_widget.getViewBox()
-        for graph in self.graphs[1:]:
-            graph.plot_widget.getViewBox().setXLink(master_vb)
+        # Sync data coordinates directly; native XLink scales ranges by viewport geometry.
+        for graph in self.graphs:
+            view_box = graph.plot_widget.getViewBox()
+            slot = lambda _view_box, xrange, source=graph: self._sync_xrange(source, xrange)
+            view_box.sigXRangeChanged.connect(slot)
+            self._xrange_slots.append((view_box, slot))
 
         # 2. 마우스 이동 연결 (십자선 동기화)
         for graph in self.graphs:
@@ -110,8 +142,39 @@ class CombinedGraphView(QWidget):
                 g.hLine.setVisible(False)
 
     def do_reset_zoom(self):
-        for graph in self.graphs:
-            graph.plot_widget.autoRange()
+        latest_values = [graph.get_latest_time() for graph in self.graphs]
+        latest_values = [value for value in latest_values if value is not None]
+        if not latest_values:
+            for graph in self.graphs:
+                graph.set_auto_y(True)
+            return
+        latest = max(latest_values)
+        x_min = latest - self.graphs[0].time_span
+        for index, graph in enumerate(self.graphs):
+            graph.set_time_range(x_min, latest, follow_latest=True, apply_x=index == 0)
+
+    def do_fit_all_data(self):
+        timestamps = [timestamp for graph in self.graphs for series in graph.times.values()
+                      if series for timestamp in (series[0], series[-1])]
+        if not timestamps:
+            self.do_reset_zoom()
+            return
+        x_min, x_max = min(timestamps), max(timestamps)
+        if x_min == x_max:
+            x_min -= self.graphs[0].time_span
+        for index, graph in enumerate(self.graphs):
+            graph.set_time_range(x_min, x_max, follow_latest=False, apply_x=index == 0)
+
+    def _sync_xrange(self, source, xrange):
+        if self._syncing_xrange:
+            return
+        self._syncing_xrange = True
+        try:
+            for graph in self.graphs:
+                if graph is not source:
+                    graph.plot_widget.setXRange(xrange[0], xrange[1], padding=0)
+        finally:
+            self._syncing_xrange = False
 
     def do_toggle_crosshair(self, checked):
         for graph in self.graphs:
@@ -221,7 +284,7 @@ class CombinedGraphView(QWidget):
             combined_pixmap.save(filepath, "PNG")
             QMessageBox.information(self, "Screenshot Saved", f"스크린샷이 성공적으로 저장되었습니다:\n{filepath}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"스크린샷 저장 중 오류 발생:\n{str(e)}")
+            show_error(self, "Error", f"스크린샷 저장 중 오류 발생:\n{str(e)}")
 
     def closeEvent(self, event):
         """창이 닫힐 때 그래프 위젯들을 원래 창으로 복원하고 동기화를 해제합니다."""
@@ -237,12 +300,15 @@ class CombinedGraphView(QWidget):
         for proxy in self.proxies:
             proxy.disconnect()
         self.proxies.clear()
+        for view_box, slot in self._xrange_slots:
+            try:
+                view_box.sigXRangeChanged.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        self._xrange_slots.clear()
 
         # 2. X축 연결 해제 및 위젯 복원
         for graph in self.graphs:
-            # X축 동기화 해제
-            graph.plot_widget.getViewBox().setXLink(None)
-            
             graph.plot_widget.setLabel('bottom', 'Time') # X축 "Time" 레이블 복원
             # Reset flag and reference
             graph.is_in_combined_view = False

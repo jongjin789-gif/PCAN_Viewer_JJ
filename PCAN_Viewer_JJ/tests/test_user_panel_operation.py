@@ -79,7 +79,7 @@ class PanelOperationTest(unittest.TestCase):
 
         with patch('src.user_panel_v2.window.verify_communication_password', return_value=True) as verify:
             control.force_toggle()
-            verify.assert_called_once_with(panel, 'communication-secret')
+            verify.assert_not_called()
         QTest.qWait(100)
 
         self.assertFalse(control.running)
@@ -93,17 +93,64 @@ class PanelOperationTest(unittest.TestCase):
         self.assertIn('주기 전송 시작', log)
         self.assertIn('주기 전송 정지', log)
 
-    def test_sequence_force_requires_communication_authorization(self):
+    def test_sequence_force_runs_without_password_and_has_execution_icon(self):
         p = packet()
         panel = self.panel([], [p])
         panel.set_mode('run')
         control = SequenceControl(panel, dict(id='seq', title='Test', widget_type='sequence',
-                                               behavior='tx', binding=dict(sequence_steps=[dict(kind='CMD', packet=p)])))
+                                               behavior='tx', binding=dict(sequence_steps=[dict(kind='DEL', delay_ms=1000), dict(kind='CMD', packet=p)])))
         self.addCleanup(control.deleteLater)
-        with patch('src.user_panel_v2.window.verify_communication_password', return_value=False):
+        self.assertFalse(control.button.icon().isNull())
+        ready_icon = control.button.icon().cacheKey()
+        with patch('src.user_panel_v2.window.verify_communication_password', return_value=False) as verify:
             control.force_toggle()
+            verify.assert_not_called()
+        self.assertTrue(control.running)
+        self.assertNotEqual(control.button.icon().cacheKey(), ready_icon)
+        control.button.click()
         self.assertFalse(control.running)
         self.assertEqual(panel.mode, 'run')
+        panel.set_mode('standby')
+        control.force_toggle()
+        self.assertFalse(control.running)
+
+    def test_packet_control_skips_commands_and_receives_including_failure_steps(self):
+        p = packet()
+        panel = self.panel([], [p])
+        panel.set_mode('run')
+        steps = [dict(kind='CMD', packet=p), dict(kind='RCV', packet=p),
+                 dict(kind='START', target_packet_id='p'), dict(kind='DEL', delay_ms=5),
+                 dict(kind='STOP', target_packet_id='p')]
+        failures = [dict(kind='CMD', packet=p), dict(kind='RCV', packet=p),
+                    dict(kind='STOP', target_packet_id='p')]
+        control = SequenceControl(panel, dict(id='seq', title='Test', widget_type='sequence',
+            behavior='tx', binding=dict(sequence_steps=steps, sequence_failure_steps=failures)))
+        self.addCleanup(control.deleteLater)
+        self.assertFalse(control.packet_button.icon().isNull())
+        with patch.object(panel, 'set_packet_transmission') as transmission, patch.object(control, '_send') as send:
+            control.packet_button.click()
+            QTest.qWait(40)
+            self.assertEqual([call.args for call in transmission.call_args_list], [('p', True), ('p', False)])
+            send.assert_not_called()
+            self.assertFalse(control.running)
+        with patch.object(panel, 'set_packet_transmission', side_effect=[ValueError('test failure'), None]) as transmission, patch.object(control, '_send') as send:
+            control.packet_button.click()
+            QTest.qWait(40)
+            self.assertEqual([call.args for call in transmission.call_args_list], [('p', True), ('p', False)])
+            send.assert_not_called()
+            self.assertTrue(control.in_failure)
+            self.assertFalse(control.running)
+        self.assertIn('CMD·RCV 제외', control.log.toPlainText())
+
+    def test_packet_control_without_start_stop_does_not_execute(self):
+        panel = self.panel([])
+        panel.set_mode('run')
+        control = SequenceControl(panel, dict(id='seq', binding=dict(sequence_steps=[dict(kind='DEL', delay_ms=100)])))
+        self.addCleanup(control.deleteLater)
+        control.packet_button.click()
+        self.assertFalse(control.running)
+        self.assertFalse(control.timer.isActive())
+        self.assertIn('START·STOP 단계가 없어', control.log.toPlainText())
 
     def test_force_run_is_not_a_panel_mode(self):
         panel = self.panel([])
@@ -199,10 +246,14 @@ class PanelOperationTest(unittest.TestCase):
     def test_log_is_bounded_and_repeated_errors_are_coalesced(self):
         log = SystemLog()
         self.addCleanup(log.close)
+        log.append('INIT: 전체 과정 완료 · OK')
         for _ in range(5):
             log.append('BUS 2 미연결', 'ERROR')
-        self.assertEqual(log.text.blockCount(), 1)
-        self.assertIn('반복 5회', log.text.toPlainText())
+        lines = log.text.toPlainText().splitlines()
+        self.assertEqual(log.text.blockCount(), 2)
+        self.assertEqual(len(lines), 2)
+        self.assertIn('전체 과정 완료 · OK', lines[0])
+        self.assertIn('반복 5회', lines[1])
         for index in range(2100):
             log.append(str(index))
         self.assertEqual(log.text.blockCount(), 2000)

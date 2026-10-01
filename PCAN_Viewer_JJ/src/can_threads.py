@@ -1,3 +1,4 @@
+from src.error_dialog import diagnostic_details
 from PyQt5.QtCore import QThread, pyqtSignal
 import datetime
 import os
@@ -25,6 +26,7 @@ class CANReceiverThread(QThread):
         self._is_first_msg = True
         self._timestamp_offset = 0.0
         self._last_queue_warning_ts = 0.0
+        self.last_error_details = ""
 
     def run(self):
         self.running = True
@@ -101,6 +103,9 @@ class CANReceiverThread(QThread):
                         self.error_signal.emit(f"Rx Warning: {err_text}")
                     continue
 
+                self.last_error_details = diagnostic_details(
+                    "CAN 수신 / CANReceiverThread.run",
+                    {"채널": getattr(self.bus, "channel_info", "unknown")})
                 self.error_signal.emit(f"Rx Error: {err_text}")
                 break
 
@@ -261,4 +266,5 @@ class LogParserThread(QThread):
                 self.progress_signal.emit(100)
                 self.finished_signal.emit(signal_data, found_msgs, raw_log_lines)
         except Exception as e:
+            self.last_error_details = diagnostic_details("로그 파일 파싱 / LogParserThread.run")
             self.error_signal.emit(str(e))

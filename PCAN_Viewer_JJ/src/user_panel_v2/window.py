@@ -1,3 +1,4 @@
+from src.error_dialog import show_error
 import copy
 import json
 import math
@@ -253,9 +254,9 @@ class UserPanelWindow(QWidget):
         controls.addWidget(self.btn_add_misc)
         add_separator()
         self.clear_buttons = {}
-        for key, text, icon in [('packets', '패킷 클리어', 'clear_packets'),
-                                ('tools', '도구 클리어', 'clear_tools'),
-                                ('all', '전체 클리어', 'clear_all')]:
+        for key, text, icon in [('packets', 'Packet clear', 'clear_packets'),
+                                ('tools', 'Tool clear', 'clear_tools'),
+                                ('all', 'All clear', 'clear_all')]:
             button = tool_button(text, icon)
             button.clicked.connect(lambda checked=False, scope=key: self.clear_panel(scope))
             self.clear_buttons[key] = button
@@ -273,15 +274,14 @@ class UserPanelWindow(QWidget):
         self.label_io = QLabel()
         self.label_bus_states = {bus: QLabel() for bus in (1, 2, 3)}
         self.init_control = SequenceControl(self, dict(title='RUN Init', is_init=True, binding={}))
-        self.init_control.setMaximumHeight(150)
         self.init_control.button.setEnabled(False)
         self.init_control.finished.connect(self._init_finished)
         self.init_control.hide()
-        root.addWidget(self.init_control)
 
         split = QSplitter(Qt.Horizontal)
 
         left = QWidget()
+        self.tool_list_panel = left
         left.setMinimumWidth(180)
         left.setMaximumWidth(340)
         left_lay = QVBoxLayout(left)
@@ -392,6 +392,7 @@ class UserPanelWindow(QWidget):
         split.addWidget(right)
         self.properties = ToolProperties(self)
         self.inspector_tabs = QTabWidget()
+        self.property_edit_panel = self.inspector_tabs
         self.inspector_tabs.addTab(self.properties, "속성")
         self.display_test_tab.setParent(self.inspector_tabs)
         self.display_test_tab.hide()
@@ -401,11 +402,17 @@ class UserPanelWindow(QWidget):
         split.setSizes([210, 630, 340])
 
         vertical = QSplitter(Qt.Vertical)
+        self.workspace_splitter = vertical
+        vertical.setHandleWidth(6)
+        vertical.setStretchFactor(0, 0)
+        vertical.addWidget(self.init_control)
         vertical.addWidget(split)
         self.system_log = SystemLog(self)
         vertical.addWidget(self.system_log)
-        vertical.setStretchFactor(0, 1)
-        vertical.setSizes([540, 140])
+        vertical.setCollapsible(0, True)
+        vertical.setStretchFactor(1, 1)
+        vertical.setStretchFactor(2, 0)
+        vertical.setSizes([150, 530, 140])
         root.addWidget(vertical, 1)
         self.status_bar = QStatusBar(self)
         self.status_bar.setSizeGripEnabled(True)
@@ -624,7 +631,7 @@ class UserPanelWindow(QWidget):
             self.act_check_overlap,
             self.act_focus_conflict,
         ]
-        menu_clear = self.menu_bar.addMenu('클리어')
+        menu_clear = self.menu_bar.addMenu('Clear')
         for key, button in self.clear_buttons.items():
             action = QAction(button.icon(), button.text(), self)
             action.triggered.connect(lambda checked=False, scope=key: self.clear_panel(scope))
@@ -1030,7 +1037,12 @@ class UserPanelWindow(QWidget):
         self.btn_packets.setEnabled(is_edit)
         self.btn_add_page.setEnabled(is_edit)
         self.btn_rename_page.setEnabled(is_edit)
+        self.btn_add_page.setVisible(is_edit)
+        self.btn_rename_page.setVisible(is_edit)
         self.btn_init.setEnabled(is_edit)
+        self.init_control.setVisible(self.mode == 'run' and bool(self.init_steps))
+        self.tool_list_panel.setVisible(is_edit)
+        self.property_edit_panel.setVisible(is_edit)
         self._set_init_tool_state()
 
         self.act_sim_auto.blockSignals(True)
@@ -1395,7 +1407,7 @@ class UserPanelWindow(QWidget):
             cfg["parent_id"] = None
 
         wtype = cfg.get("widget_type", "label")
-        min_row_span = 1 if wtype == "shape_line" else 2
+        min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
         min_col_span = 1 if wtype == "shape_line" else 4
 
         cfg["row"] = max(0, min(self.grid_rows - 1, int(cfg.get("row", 0))))
@@ -1571,7 +1583,7 @@ class UserPanelWindow(QWidget):
 
             # 선택된 위젯이 있을 경우: 위젯 타입에 맞는 최소 크기 제약을 적용합니다.
             wtype = cfg.get("widget_type")
-            min_row_span = 1 if wtype == "shape_line" else 2
+            min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
             min_col_span = 1 if wtype == "shape_line" else 4
 
             self.spin_sel_row_span.setRange(min_row_span, self.grid_rows)
@@ -1867,7 +1879,7 @@ class UserPanelWindow(QWidget):
                     c_start = int(cfg.get("col", 0))
 
                     wtype = cfg.get("widget_type")
-                    min_row_span = 1 if wtype == "shape_line" else 2
+                    min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
                     min_col_span = 1 if wtype == "shape_line" else 4
                     cfg["row_span"] = max(min_row_span, r_end - r_start + 1)
                     cfg["col_span"] = max(min_col_span, c_end - c_start + 1)
@@ -2005,19 +2017,30 @@ class UserPanelWindow(QWidget):
             value_label = QLabel(self._format_slider_value(binding, display_initial))
             value_label.setObjectName("value_label")
             value_label.setAlignment(Qt.AlignCenter)
+            value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            value_label.setFixedHeight(value_label.fontMetrics().height() + 2)
+            slider_area = QWidget()
+            slider_area_layout = QVBoxLayout(slider_area)
+            slider_area_layout.setContentsMargins(0, 0, 0, 0)
+            slider_area_layout.setSpacing(0)
+            slider_area_layout.addStretch(1)
+            slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            slider.setFixedHeight(max(28, slider.sizeHint().height() + 8))
+            slider_area_layout.addWidget(slider)
+            slider_area_layout.addWidget(value_label)
+            slider_area_layout.addStretch(1)
             title = QLabel(f"[{str(behavior).upper()}] {cfg.get('title', 'Widget')}")
             title.setObjectName("slider_title")
             title.setProperty("panelTitle", True)
             title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             lay.addWidget(title, 0, 1)
-            lay.addWidget(slider, 1, 1, 1, 2)
-            lay.addWidget(value_label, 2, 1, 1, 2)
+            lay.addWidget(slider_area, 1, 1, 2, 2)
             value_input = QLineEdit(self._format_slider_value(binding, display_initial))
             value_input.setObjectName("slider_value_input")
             value_input.setMinimumWidth(40)
             value_input.setMaximumWidth(130)
-            value_input.setToolTip("값 입력 후 Set 또는 Enter. 숫자가 아니면 Home 값으로 복귀합니다.")
+            value_input.setToolTip("입력값은 유지되며 Set을 눌러야 적용됩니다. 숫자가 아니면 Home 값으로 복귀합니다.")
             set_button = QPushButton("Set")
             set_button.setObjectName("slider_set")
             input_row = QHBoxLayout()
@@ -2035,19 +2058,23 @@ class UserPanelWindow(QWidget):
             def _on_changed(v):
                 ratio = 0.0 if steps <= 0 else (v / float(steps))
                 phys = min_v + ((max_v - min_v) * ratio)
+                command_value = phys
                 if behavior == "tx":
                     phys = quantize_value(binding, phys)
                 value_label.setText(self._format_slider_value(binding, phys))
-                value_input.setText(self._format_slider_value(binding, phys))
                 if behavior == "tx":
-                    self._emit_tx(cfg, phys)
+                    self._emit_tx(cfg, command_value if cfg.get('tx_commands') else phys)
 
             slider.valueChanged.connect(_on_changed)
             def _home():
-                if slider.value() == initial_step:
-                    _on_changed(initial_step)
-                else:
+                was_blocked = slider.blockSignals(True)
+                try:
                     slider.setValue(initial_step)
+                finally:
+                    slider.blockSignals(was_blocked)
+                value_label.setText(self._format_slider_value(binding, display_initial))
+                if behavior == "tx":
+                    self._emit_tx(dict(cfg, _slider_home=True), initial)
             home.clicked.connect(_home)
             def _set_value():
                 try:
@@ -2064,7 +2091,6 @@ class UserPanelWindow(QWidget):
                 else:
                     slider.setValue(target)
             set_button.clicked.connect(_set_value)
-            value_input.returnPressed.connect(_set_value)
             return container, None
 
         if wtype == "spinbox":
@@ -2278,7 +2304,7 @@ class UserPanelWindow(QWidget):
             return
 
         wtype = cfg.get("widget_type")
-        min_row_span = 1 if wtype == "shape_line" else 2
+        min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
         min_col_span = 1 if wtype == "shape_line" else 4
 
         col_span = int(cfg.get("col_span", 1)) + int(dcol_span)
@@ -2411,6 +2437,21 @@ class UserPanelWindow(QWidget):
                 key = packet['packet_id']
                 runtime = self._packet_runtimes[key]
                 command_value = binding.get(cfg['_tx_action'], value) if cfg.get('_tx_action') else value
+                if cfg.get('widget_type') == 'slider':
+                    primary = cfg.get('binding', {})
+                    low, high = float(primary.get('min', 0)), float(primary.get('max', 100))
+                    target_low = float(binding.get('min', low))
+                    target_high = float(binding.get('max', high))
+                    if high <= low or target_high <= target_low:
+                        raise ValueError('Slider Max must be greater than Min.')
+                    if cfg.get('_slider_home'):
+                        command_value = max(target_low, min(target_high,
+                            float(binding.get('tx_initial_value', target_low))))
+                    elif binding.get('slider_mapping', 'direct') == 'direct':
+                        command_value = max(target_low, min(target_high, float(value)))
+                    else:
+                        ratio = max(0.0, min(1.0, (float(value) - low) / (high - low)))
+                        command_value = target_low + ratio * (target_high - target_low)
                 pending[key] = pack_value(pending.get(key, runtime.overlay), binding, command_value)
             changed = []
             for key, overlay in pending.items():
@@ -2420,6 +2461,7 @@ class UserPanelWindow(QWidget):
                     runtime.overlay = overlay
                     changed.append((runtime, previous))
             errors = []
+            failed = set()
             for runtime, previous in changed:
                 if runtime.packet['cycle'] == 0:
                     try:
@@ -2428,12 +2470,50 @@ class UserPanelWindow(QWidget):
                         # Failed immediate commands are not queued as sent values.
                         # A later explicit action with the same value can retry.
                         runtime.overlay = previous
+                        failed.add(runtime.packet['packet_id'])
                         packet = runtime.packet
                         errors.append(f"BUS {packet['bus']} / 0x{packet['id']:X}: {exc}")
+            if cfg.get('widget_type') == 'slider':
+                self._sync_tx_sliders(cfg, set(pending) - failed)
             if errors:
                 self._report_packet_error(' | '.join(errors))
         except Exception as exc:
             self._report_packet_error(exc)
+
+    def _sync_tx_sliders(self, source, applied_packets):
+        """Reflect command overlays without sending from another control."""
+        from .binding import bit_positions, unpack_raw
+
+        def field_key(binding):
+            packet = find_packet(self.tx_packets, binding)
+            if packet is None or packet['packet_id'] not in applied_packets:
+                return None
+            return (packet['packet_id'], tuple(bit_positions(binding, packet['length'])))
+
+        source_bindings = command_bindings(source, enabled_only=True)
+        touched = {field_key(binding) for binding in source_bindings} - {None}
+        source_is_multi = len(source_bindings) > 1
+        for cfg in self.widgets_config:
+            if (cfg.get('id') == source.get('id') or cfg.get('behavior') != 'tx'
+                    or cfg.get('widget_type') != 'slider'):
+                continue
+            bindings = command_bindings(cfg, enabled_only=True)
+            matched = [binding for binding in bindings if field_key(binding) in touched]
+            if not matched:
+                continue
+            if len(bindings) > 1:
+                if not source_is_multi:
+                    primary = cfg.get('binding', {})
+                    home = max(float(primary.get('min', 0)), min(float(primary.get('max', 100)),
+                               float(primary.get('tx_initial_value', primary.get('min', 0)))))
+                    self._update_widget_value(cfg, home)
+                continue
+            binding = matched[0]
+            packet = find_packet(self.tx_packets, binding)
+            payload = self._packet_runtimes[packet['packet_id']].overlay
+            raw = unpack_raw(payload, binding)
+            value = raw * float(binding.get('scale', 1)) + float(binding.get('offset', 0))
+            self._update_widget_value(cfg, value)
 
     def _frame_key_from_binding(self, binding):
         return (
@@ -2674,16 +2754,10 @@ class UserPanelWindow(QWidget):
                     ratio = 0.0 if max_v == min_v else (v - min_v) / (max_v - min_v)
                     ratio = min(1.0, max(0.0, ratio))
                     slider.blockSignals(True)
-                    slider.setValue(int(ratio * steps))
+                    slider.setValue(int(round(ratio * steps)))
                     slider.blockSignals(False)
                     if value_label is not None:
                         value_label.setText(self._format_slider_value(binding, v))
-                    value_input = ctrl.findChild(QLineEdit, "slider_value_input")
-                    if value_input is not None and not value_input.hasFocus():
-                        value_input.setText(self._format_slider_value(binding, v))
-                    value_input = ctrl.findChild(QLineEdit, "slider_value_input")
-                    if value_input is not None and not value_input.hasFocus():
-                        value_input.setText(self._format_slider_value(binding, v))
             return
 
         if wtype == "spinbox":
@@ -2839,7 +2913,7 @@ class UserPanelWindow(QWidget):
             QMessageBox.information(self, "Saved", "User panel saved successfully.")
         except Exception as e:
             self.log_system(f'패널 설정 저장 실패: {e}', 'ERROR')
-            QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
+            show_error(self, "Error", f"Save failed:\n{e}")
 
     def load_panel_from_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Load User Panel", "", "User Panel (*.upp.json)")
@@ -2854,7 +2928,7 @@ class UserPanelWindow(QWidget):
             QMessageBox.information(self, "Loaded", "User panel loaded successfully.")
         except Exception as e:
             self.log_system(f'패널 설정 불러오기 실패: {e}', 'ERROR')
-            QMessageBox.critical(self, "Error", f"Load failed:\n{e}")
+            show_error(self, "Error", f"Load failed:\n{e}")
 
     def _load_panel_data(self, data):
         if not isinstance(data, dict):
@@ -2926,7 +3000,7 @@ class UserPanelWindow(QWidget):
             QMessageBox.information(self, "Saved", f"Package saved:\n{out_path}")
         except Exception as e:
             self.log_system(f'패널 패키지 저장 실패: {e}', 'ERROR')
-            QMessageBox.critical(self, "Error", f"Package save failed:\n{e}")
+            show_error(self, "Error", f"Package save failed:\n{e}")
 
     def load_package(self):
         if not self._authorize_communication():
@@ -2954,4 +3028,4 @@ class UserPanelWindow(QWidget):
             QMessageBox.information(self, "Loaded", "Package loaded successfully.")
         except Exception as e:
             self.log_system(f'패널 패키지 불러오기 실패: {e}', 'ERROR')
-            QMessageBox.critical(self, "Error", f"Package load failed:\n{e}")
+            show_error(self, "Error", f"Package load failed:\n{e}")

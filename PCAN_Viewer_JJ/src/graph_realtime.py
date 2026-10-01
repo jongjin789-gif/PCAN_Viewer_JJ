@@ -1,3 +1,4 @@
+from src.error_dialog import show_error
 import sys
 import os
 import re
@@ -8,6 +9,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont
 import pyqtgraph as pg
+from src.graph_toolbar import graph_button, graph_toolbar
 from src.utils import get_resource_path, TimeAxisItem, TagTextItem
 from src.dialogs import LabelEditorDialog, FormulaDialog
 
@@ -35,36 +37,39 @@ class SignalGraphWindow(QWidget):
 
         # --- 상단 컨트롤 패널 ---
         top_ctrl_layout = QVBoxLayout()
-        row1_layout = QHBoxLayout()
         row2_layout = QHBoxLayout()
         
-        self.btn_start = QPushButton("START")
-        self.btn_stop = QPushButton("STOP")
+        self.btn_start = graph_button(self, "START", "start")
+        self.btn_stop = graph_button(self, "STOP", "stop")
         
-        self.btn_autoscroll = QPushButton("Auto-Scroll")
+        self.btn_autoscroll = graph_button(self, "Auto-Scroll", "autoscroll")
         self.btn_autoscroll.setCheckable(True)
         self.btn_autoscroll.setChecked(True)
+        self.btn_reset_zoom = graph_button(self, "Reset Zoom", "reset_zoom")
+        self.chk_auto_y = graph_button(self, "Auto Y", "auto_y", checkable=True)
+        self.chk_auto_y.setChecked(True)
 
-        self.btn_combined_view = QPushButton("Combined View")
+        self.btn_combined_view = graph_button(self, "Combined View", "combined")
         
-        self.chk_sync = QCheckBox("Sync X-Axis")
+        self.chk_sync = graph_button(self, "Sync X-Axis", "sync_x", checkable=True)
         self.chk_sync.setChecked(False)
         
-        self.chk_crosshair = QCheckBox("Show Crosshair")
+        self.chk_crosshair = graph_button(self, "Show Crosshair", "crosshair", checkable=True)
         self.chk_crosshair.setChecked(True)
         
-        self.btn_clear_tags = QPushButton("Clear Tags")
+        self.btn_clear_tags = graph_button(self, "Clear Tags", "clear_tags")
         
-        self.btn_edit_labels = QPushButton("Edit Labels")
+        self.btn_edit_labels = graph_button(self, "Edit Labels", "edit_labels")
         self.btn_edit_labels.clicked.connect(self.open_label_editor)
 
-        self.btn_formula = QPushButton("Formula")
+        self.btn_formula = graph_button(self, "Formula", "formula")
         self.btn_formula.clicked.connect(self.open_formula_editor)
 
-        self.btn_screenshot = QPushButton("Screenshot")
+        self.btn_screenshot = graph_button(self, "Screenshot", "screenshot")
         self.btn_screenshot.clicked.connect(self.take_screenshot)
         
         self.combo_hover_signal = QComboBox()
+        self.combo_hover_signal.setToolTip("Hover signal")
         for name in signal_names:
             self.combo_hover_signal.addItem(name, name)
         
@@ -74,18 +79,14 @@ class SignalGraphWindow(QWidget):
         font.setBold(True)
         self.label_info.setFont(font)
         
-        row1_layout.addWidget(self.btn_start)
-        row1_layout.addWidget(self.btn_stop)
-        row1_layout.addWidget(self.btn_autoscroll)
-        row1_layout.addWidget(self.btn_combined_view)
-        row1_layout.addWidget(self.chk_sync)
-        row1_layout.addStretch()
-        row1_layout.addWidget(self.chk_crosshair)
-        row1_layout.addWidget(self.btn_clear_tags)
-        
-        row2_layout.addWidget(self.btn_edit_labels)
-        row2_layout.addWidget(self.btn_formula)
-        row2_layout.addWidget(self.btn_screenshot)
+        row1_layout = graph_toolbar(self, [
+            [self.btn_start, self.btn_stop],
+            [self.btn_autoscroll, self.btn_reset_zoom, self.chk_auto_y],
+            [self.chk_sync, self.btn_combined_view],
+            [self.chk_crosshair, self.btn_clear_tags],
+            [self.btn_edit_labels, self.btn_formula, self.btn_screenshot],
+        ])
+
         row2_layout.addStretch()
         row2_layout.addWidget(self.combo_hover_signal)
         row2_layout.addWidget(self.label_info)
@@ -181,6 +182,8 @@ class SignalGraphWindow(QWidget):
         self.btn_start.clicked.connect(self.start_graph)
         self.btn_stop.clicked.connect(self.stop_graph)
         self.btn_autoscroll.clicked.connect(self.on_autoscroll_clicked)
+        self.btn_reset_zoom.clicked.connect(self.reset_zoom)
+        self.chk_auto_y.toggled.connect(self.set_auto_y)
         self.chk_sync.toggled.connect(self.notify_sync_toggle)
         self.btn_combined_view.clicked.connect(self.request_combined_view)
         self.btn_clear_tags.clicked.connect(self.on_clear_tags_clicked)
@@ -203,6 +206,7 @@ class SignalGraphWindow(QWidget):
         
         # 마우스 클릭 이벤트 (원하는 데이터 지점에 태그/마커 고정)
         self.plot_widget.scene().sigMouseClicked.connect(self.on_mouse_clicked)
+        self.set_auto_y(True)
 
     def get_parent_window(self):
         """상위 부모 윈도우(메인 또는 뷰어)를 반환합니다."""
@@ -641,7 +645,7 @@ class SignalGraphWindow(QWidget):
             combined_pixmap.save(filepath, "PNG")
             QMessageBox.information(self, "Screenshot Saved", f"스크린샷이 성공적으로 저장되었습니다:\n{filepath}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"스크린샷 저장 중 오류 발생:\n{str(e)}")
+            show_error(self, "Error", f"스크린샷 저장 중 오류 발생:\n{str(e)}")
 
     def start_graph(self):
         self.is_playing = True
@@ -679,6 +683,37 @@ class SignalGraphWindow(QWidget):
             latest = self.get_latest_time()
             if latest is not None:
                 self.plot_widget.setXRange(latest - 30.0, latest, padding=0)
+                if self.chk_auto_y.isChecked():
+                    self._apply_auto_y(True)
+
+    def _apply_auto_y(self, enabled):
+        view_box = self.plot_widget.getViewBox()
+        view_box.setAutoVisible(y=enabled)
+        view_box.enableAutoRange(axis='y', enable=enabled)
+        if enabled:
+            view_box.updateAutoRange()
+
+    def set_auto_y(self, enabled):
+        self._apply_auto_y(bool(enabled))
+
+    def set_time_range(self, x_min, x_max, follow_latest=False, apply_x=True):
+        was_blocked = self.btn_autoscroll.blockSignals(True)
+        self.btn_autoscroll.setChecked(bool(follow_latest))
+        self.btn_autoscroll.blockSignals(was_blocked)
+        if apply_x:
+            self.plot_widget.setXRange(float(x_min), float(x_max), padding=0)
+        was_blocked = self.chk_auto_y.blockSignals(True)
+        self.chk_auto_y.setChecked(True)
+        self.chk_auto_y.blockSignals(was_blocked)
+        self._apply_auto_y(True)
+
+    def reset_zoom(self, latest=None):
+        if latest is None:
+            latest = self.get_latest_time()
+        if latest is None:
+            self.set_auto_y(True)
+            return
+        self.set_time_range(latest - self.time_span, latest, follow_latest=True)
 
     def disable_autoscroll(self):
         self.btn_autoscroll.setChecked(False)
@@ -1105,9 +1140,6 @@ class SignalGraphWindow(QWidget):
         if self.btn_autoscroll.isChecked():
             latest = self.get_latest_time()
             if latest is not None:
-                # setXRange는 내부적으로 Y축의 auto-range도 비활성화하므로,
-                # X축 범위를 수동으로 설정한 후 Y축은 데이터에 맞게 자동으로 조절되도록 다시 활성화합니다.
-                # 이렇게 하면 Combined View에서도 실시간 데이터 수신 시 Y축이 자동으로 조절됩니다.
-                auto_y = self.plot_widget.getViewBox().autoRangeEnabled()[1]
                 self.plot_widget.setXRange(latest - self.time_span, latest, padding=0)
-                self.plot_widget.enableAutoRange(axis='y', enable=auto_y)
+        if self.chk_auto_y.isChecked():
+            self._apply_auto_y(True)

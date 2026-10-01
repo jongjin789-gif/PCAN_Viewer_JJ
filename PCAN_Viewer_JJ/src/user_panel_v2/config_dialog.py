@@ -223,6 +223,14 @@ class WidgetConfigDialog(QDialog):
         self.spin_max.setValue(100.0)
         form_value.addRow("Min", self.spin_min)
         form_value.addRow("Max", self.spin_max)
+        self.combo_slider_mapping = QComboBox()
+        self.combo_slider_mapping.addItem("값 그대로 적용 (Min~Max 제한)", "direct")
+        self.combo_slider_mapping.addItem("백분율 적용", "percent")
+        self.combo_slider_mapping.setToolTip(
+            "백분율: 기본 슬라이더 위치를 이 명령의 Min~Max로 환산합니다.\n"
+            "값 그대로: 기본 슬라이더 값을 사용하며 이 명령의 Min~Max 범위로 제한합니다.\n"
+            "Home 버튼은 적용 방식과 관계없이 이 명령의 Home 값을 사용합니다.")
+        form_value.addRow("값 적용 방식", self.combo_slider_mapping)
 
         self.spin_resolution = QDoubleSpinBox()
         self.spin_resolution.setDecimals(6)
@@ -359,6 +367,7 @@ class WidgetConfigDialog(QDialog):
 
         self._register_row(form_value, self.spin_min)
         self._register_row(form_value, self.spin_max)
+        self._register_row(form_value, self.combo_slider_mapping)
         self._register_row(form_value, self.spin_resolution)
         self._register_row(form_value, self.spin_slider_initial)
         self._register_row(form_value, self.stack_press_value)
@@ -479,6 +488,7 @@ class WidgetConfigDialog(QDialog):
         root.addLayout(btns)
 
         watchers = [
+            self.combo_slider_mapping,
             self.combo_widget_type,
             self.combo_behavior,
             self.combo_title_align,
@@ -560,6 +570,9 @@ class WidgetConfigDialog(QDialog):
                                    f"0x{int(binding.get('can_id', 0)):X} · "
                                    f"{binding.get('signal_name') or 'Bit ' + str(binding.get('start_bit', 0))}")
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            if self.combo_widget_type.currentText() == 'slider':
+                mode = '값 그대로' if binding.get('slider_mapping', 'direct') == 'direct' else '백분율'
+                item.setText(item.text() + f" · {mode}")
             item.setCheckState(Qt.Checked if command.get('enabled', True) else Qt.Unchecked)
             self.command_list.addItem(item)
         self.command_list.blockSignals(False)
@@ -592,9 +605,10 @@ class WidgetConfigDialog(QDialog):
         dialog.setWindowTitle('추가 명령 설정')
         dialog.combo_widget_type.setEnabled(False)
         if preset['widget_type'] == 'slider':
-            for field in (dialog.spin_min, dialog.spin_max, dialog.spin_resolution, dialog.spin_slider_initial):
+            for field in (dialog.spin_resolution,):
                 field.setEnabled(False)
-                field.setToolTip('슬라이더 범위와 초기값은 기본 도구 설정을 사용합니다.')
+                field.setToolTip('슬라이더 이동 간격은 기본 도구의 분해능을 사용합니다. 각 명령의 Min/Max 범위로 비율 환산합니다.')
+            dialog.spin_slider_initial.setToolTip('Home 버튼을 누르면 이 명령에 적용할 값입니다.')
         for field in (dialog.spin_row, dialog.spin_col, dialog.spin_row_span,
                       dialog.spin_col_span, dialog.combo_parent_tool, dialog.combo_title_align):
             field.setEnabled(False)
@@ -700,8 +714,11 @@ class WidgetConfigDialog(QDialog):
         if wtype == "shape_line":
             self.spin_row_span.setMinimum(1)
             self.spin_col_span.setMinimum(1)
+        elif wtype == "slider":
+            self.spin_row_span.setMinimum(3)
+            self.spin_col_span.setMinimum(4)
         else:
-            # 일반 위젯의 최소 크기는 2행 x 4열입니다.
+            # 일반 위젯은 2행, 슬라이더는 내부 3행을 표시할 공간이 필요합니다.
             self.spin_row_span.setMinimum(2)
             self.spin_col_span.setMinimum(4)
 
@@ -743,6 +760,8 @@ class WidgetConfigDialog(QDialog):
 
         self._set_row_visible(self.spin_resolution, is_tx and wtype in ("slider", "spinbox"))
         self._set_row_visible(self.spin_slider_initial, is_tx and wtype == "slider")
+        self._set_row_visible(self.combo_slider_mapping,
+                              is_tx and wtype == 'slider' and not self.allow_multi)
         self._set_row_visible(self.combo_frame_type, is_tx and self.tx_packets is None)
         self._set_row_visible(self.chk_brs, is_tx and self.tx_packets is None)
         self.edit_can_id.setReadOnly(is_tx and self.tx_packets is not None)
@@ -1127,6 +1146,7 @@ class WidgetConfigDialog(QDialog):
                 "min": self._round_value(min_v),
                 "max": self._round_value(max_v),
                 "tx_resolution": float(self.spin_resolution.value()),
+                "slider_mapping": self.combo_slider_mapping.currentData(),
                 "sequence_steps": copy.deepcopy(self.sequence_steps),
                 "sequence_failure_steps": copy.deepcopy(self.sequence_failure_steps),
                 "tx_initial_value": float(self.spin_slider_initial.value()),
@@ -1215,6 +1235,8 @@ class WidgetConfigDialog(QDialog):
         self.spin_max.setValue(float(binding.get("max", 100.0)))
 
         self.spin_resolution.setValue(float(binding.get("tx_resolution", 1.0)))
+        self.combo_slider_mapping.setCurrentIndex(max(0, self.combo_slider_mapping.findData(
+            binding.get('slider_mapping', 'direct'))))
         self.spin_slider_initial.setValue(float(binding.get("tx_initial_value", binding.get("min", 0.0))))
         self.spin_press_value.setValue(float(binding.get("tx_press_value", binding.get("max", 100.0))))
         self.spin_release_value.setValue(float(binding.get("tx_release_value", binding.get("min", 0.0))))

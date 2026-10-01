@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt5.QtCore import QPoint
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QSlider, QLineEdit
 from cantools.database.conversion import BaseConversion
 from cantools.database.can import Message, Signal
@@ -37,13 +38,17 @@ class SliderTest(unittest.TestCase):
             ctrl.show()
             self.app.processEvents()
             self.assertGreaterEqual(home.width(), home.sizeHint().width())
-            self.assertLess(home.geometry().right(), slider.geometry().left())
+            slider_top_left = slider.mapTo(ctrl, QPoint(0, 0))
+            self.assertLess(home.geometry().right(), slider_top_left.x())
             entry = ctrl.findChild(QLineEdit, "slider_value_input")
             set_button = ctrl.findChild(QPushButton, "slider_set")
             self.assertLess(entry.geometry().right(), set_button.geometry().left())
-            self.assertLess(entry.geometry().center().y(), slider.geometry().center().y())
-            self.assertGreater(label.geometry().center().y(), slider.geometry().center().y())
-            self.assertGreaterEqual(home.geometry().bottom(), label.geometry().bottom())
+            self.assertLess(entry.geometry().center().y(), slider_top_left.y() + slider.height() / 2)
+            value_top_left = label.mapTo(ctrl, QPoint(0, 0))
+            self.assertGreater(value_top_left.y() + label.height() / 2,
+                               slider_top_left.y() + slider.height() / 2)
+            self.assertLessEqual(value_top_left.y() - (slider_top_left.y() + slider.height()), 4)
+            self.assertLessEqual(ctrl.rect().bottom() - (value_top_left.y() + label.height()), 16)
             ctrl.deleteLater()
         panel.db_messages = {1: {1: SimpleNamespace(get_signal_by_name=lambda name: SimpleNamespace(is_float=False))}}
         self.assertEqual(panel._format_slider_value(dict(bus=1, can_id=1, signal_name="Count", tx_resolution=0.1), 5), "5")
@@ -58,6 +63,29 @@ class SliderTest(unittest.TestCase):
         self.assertEqual(restored.get_config()["binding"]["tx_initial_value"], 12.345678)
         dialog.deleteLater()
         restored.deleteLater()
+
+    def test_slider_tool_uses_three_grid_rows_and_keeps_controls_inside(self):
+        panel = UserPanelWindow(SimpleNamespace(), {})
+        panel._load_panel_data(dict(grid=dict(rows=8, cols=8, cell_size=32), widgets=[dict(
+            id="slider", title="ANGLE", widget_type="slider", behavior="tx",
+            row=0, col=0, row_span=2, col_span=4,
+            binding=dict(min=-65, max=65, tx_resolution=0.1, tx_initial_value=0))]))
+        panel.resize(800, 500)
+        panel.show()
+        self.app.processEvents()
+
+        self.assertEqual(panel.widgets_config[0]["row_span"], 3)
+        control = panel.widget_controls["slider"]
+        home = control.findChild(QPushButton, "slider_home")
+        slider = control.findChild(QSlider, "slider")
+        value = control.findChild(QLabel, "value_label")
+        slider_top_left = slider.mapTo(control, QPoint(0, 0))
+        value_top_left = value.mapTo(control, QPoint(0, 0))
+        self.assertGreaterEqual(control.height(), home.sizeHint().height())
+        self.assertGreaterEqual(control.rect().bottom(), home.geometry().bottom())
+        self.assertGreaterEqual(control.rect().bottom(), slider_top_left.y() + slider.height())
+        self.assertGreaterEqual(control.rect().bottom(), value_top_left.y() + value.height())
+        panel.close()
 
     def test_tx_slider_displays_the_dbc_decoded_value(self):
         conversion = BaseConversion.factory(scale=0.125, offset=0.1)

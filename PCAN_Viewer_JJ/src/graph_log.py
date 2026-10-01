@@ -1,3 +1,4 @@
+from src.error_dialog import show_error
 import sys
 import os
 import re
@@ -7,6 +8,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont
 import pyqtgraph as pg
+from src.graph_toolbar import graph_button, graph_toolbar
 from src.utils import get_resource_path, TimeAxisItem, TagTextItem
 from src.dialogs import LabelEditorDialog, FormulaDialog
 
@@ -31,31 +33,31 @@ class LogGraphWindow(QWidget):
 
         # --- 상단 컨트롤 패널 ---
         top_ctrl_layout = QVBoxLayout()
-        row1_layout = QHBoxLayout()
         row2_layout = QHBoxLayout()
 
-        self.btn_reset_zoom = QPushButton("Reset Zoom")
+        self.btn_reset_zoom = graph_button(self, "Reset Zoom", "reset_zoom")
 
-        self.btn_combined_view = QPushButton("Combined View")
+        self.btn_combined_view = graph_button(self, "Combined View", "combined")
         
-        self.chk_sync = QCheckBox("Sync X-Axis")
+        self.chk_sync = graph_button(self, "Sync X-Axis", "sync_x", checkable=True)
         self.chk_sync.setChecked(False)
         
-        self.chk_crosshair = QCheckBox("Show Crosshair")
+        self.chk_crosshair = graph_button(self, "Show Crosshair", "crosshair", checkable=True)
         self.chk_crosshair.setChecked(True)
         
-        self.btn_clear_tags = QPushButton("Clear Tags")
+        self.btn_clear_tags = graph_button(self, "Clear Tags", "clear_tags")
         
-        self.btn_edit_labels = QPushButton("Edit Labels")
+        self.btn_edit_labels = graph_button(self, "Edit Labels", "edit_labels")
         self.btn_edit_labels.clicked.connect(self.open_label_editor)
 
-        self.btn_formula = QPushButton("Formula")
+        self.btn_formula = graph_button(self, "Formula", "formula")
         self.btn_formula.clicked.connect(self.open_formula_editor)
 
-        self.btn_screenshot = QPushButton("Screenshot")
+        self.btn_screenshot = graph_button(self, "Screenshot", "screenshot")
         self.btn_screenshot.clicked.connect(self.take_screenshot)
         
         self.combo_hover_signal = QComboBox()
+        self.combo_hover_signal.setToolTip("Hover signal")
         for name in self.signal_names:
             self.combo_hover_signal.addItem(name, name)
         
@@ -65,16 +67,13 @@ class LogGraphWindow(QWidget):
         font.setBold(True)
         self.label_info.setFont(font)
         
-        row1_layout.addWidget(self.btn_reset_zoom)
-        row1_layout.addWidget(self.btn_combined_view)
-        row1_layout.addWidget(self.chk_sync)
-        row1_layout.addStretch()
-        row1_layout.addWidget(self.chk_crosshair)
-        row1_layout.addWidget(self.btn_clear_tags)
-        
-        row2_layout.addWidget(self.btn_edit_labels)
-        row2_layout.addWidget(self.btn_formula)
-        row2_layout.addWidget(self.btn_screenshot)
+        row1_layout = graph_toolbar(self, [
+            [self.btn_reset_zoom],
+            [self.btn_combined_view, self.chk_sync],
+            [self.chk_crosshair, self.btn_clear_tags],
+            [self.btn_edit_labels, self.btn_formula, self.btn_screenshot],
+        ])
+
         row2_layout.addStretch()
         row2_layout.addWidget(self.combo_hover_signal)
         row2_layout.addWidget(self.label_info)
@@ -555,7 +554,7 @@ class LogGraphWindow(QWidget):
             combined_pixmap.save(filepath, "PNG")
             QMessageBox.information(self, "Screenshot Saved", f"스크린샷이 성공적으로 저장되었습니다:\n{filepath}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"스크린샷 저장 중 오류 발생:\n{str(e)}")
+            show_error(self, "Error", f"스크린샷 저장 중 오류 발생:\n{str(e)}")
 
     def toggle_crosshair(self, checked):
         if not checked:

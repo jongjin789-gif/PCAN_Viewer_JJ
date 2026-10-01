@@ -1,3 +1,4 @@
+from src.error_dialog import show_error, diagnostic_details
 import sys, os, re
 import platform
 import subprocess
@@ -98,7 +99,8 @@ class UniversalCANMonitor(QMainWindow):
         if session is not None and session.errors is not None:
             session.errors.append(message)
         else:
-            QMessageBox.warning(self.user_panel_window or self, title, message)
+            show_error(self.user_panel_window or self, title, message,
+                       icon=QMessageBox.Warning)
         
     def get_app_version(self):
         """build_exe.py 파일 또는 실행 파일명에서 APP_VERSION을 추출하여 타이틀에 표시합니다."""
@@ -1166,8 +1168,24 @@ class UniversalCANMonitor(QMainWindow):
             self.statusBar().showMessage(f"Bus {bus_num}: {err_msg}", 5000)
             return
 
+        receiver = self.rx_threads.get(bus_num)
+        details = getattr(receiver, 'last_error_details', '') or diagnostic_details('CAN 수신')
+        panel = self.user_panel_window
+        context = {
+            'BUS': bus_num,
+            '장치': self.combo_channels[bus_num].currentText(),
+            'Nominal bitrate': self.combo_bitrate[bus_num].currentText(),
+            'CAN FD': self.bus_capabilities[bus_num].get('is_fd', False),
+            'Data bitrate': self.combo_data_bitrate[bus_num].currentText(),
+            '유저패널 모드': getattr(panel, 'mode', '패널 없음'),
+            '그래프 수': len(self.active_graphs),
+            '프로그램 버전': self.get_app_version(),
+            '오류 후 처리': '해당 BUS 송수신 중지 및 연결 해제',
+        }
+        details += '\n오류 처리 직전 상태:\n' + '\n'.join(f'{k}: {v}' for k, v in context.items())
         self.close_can(bus_num)
-        QMessageBox.critical(self.user_panel_window or self, f"CAN Rx Error (Bus {bus_num})", err_msg)
+        show_error(self.user_panel_window or self, f"CAN Rx Error (Bus {bus_num})",
+                   err_msg, details=details)
    
     def load_database_file(self, bus_num):
         """DBC 또는 SYM 파일 로드 후 파싱하여 트리 구조 생성"""
@@ -1189,7 +1207,7 @@ class UniversalCANMonitor(QMainWindow):
                 self.tx_panel.auto_save_packets()
         except Exception as exc:
             self.panel_system_event(f'BUS {bus_num} DBC 불러오기 실패: {path}: {exc}', 'ERROR')
-            QMessageBox.critical(self.user_panel_window or self, 'Load Error', f'Failed to parse {path}:\n{exc}')
+            show_error(self.user_panel_window or self, 'Load Error', f'Failed to parse {path}:\n{exc}')
 
     def parse_database_bytes(self, name, raw):
         import tempfile

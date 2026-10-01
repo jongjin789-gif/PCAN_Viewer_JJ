@@ -1,3 +1,4 @@
+from src.error_dialog import show_error
 import sys
 import os
 import datetime
@@ -132,7 +133,7 @@ class RecordWindow(QWidget):
                 self.is_saved = True
                 self.close() # 저장 완료 후 창 자동 닫기
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save file:\n{str(e)}")
+            show_error(self, "Error", f"Failed to save file:\n{str(e)}")
 
     def auto_save_log(self):
         if getattr(sys, 'frozen', False):
