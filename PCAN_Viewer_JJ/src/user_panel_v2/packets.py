@@ -1,3 +1,4 @@
+from src.bus_config import BUS_IDS, PACKET_BUS_IDS
 """Registered TX packets, bit overlays, and panel-owned transmission state."""
 import copy
 import uuid
@@ -17,8 +18,8 @@ from .masked_data import MaskedDataInput
 
 
 def validate_packet(packet, db_messages):
-    if type(packet.get('bus')) is not int or packet['bus'] not in (0, 1, 2, 3):
-        raise ValueError('BUS는 미선택 또는 1~3이어야 합니다.')
+    if type(packet.get('bus')) is not int or packet['bus'] not in PACKET_BUS_IDS:
+        raise ValueError('BUS는 미선택 또는 1~4이어야 합니다.')
     n = packet['length']
     if n not in (list(range(9)) + ([12, 16, 20, 24, 32, 48, 64] if packet['is_fd'] else [])) or len(packet['data']) != n:
         raise ValueError('등록 패킷의 데이터 길이를 확인하세요.')
@@ -105,7 +106,7 @@ def validate_command_data(data, length):
 
 
 def connected_packet_bus(main, packet):
-    if packet.get('bus') not in (1, 2, 3):
+    if packet.get('bus') not in BUS_IDS:
         raise ValueError('CAN BUS 미선택 패킷은 송신하지 않습니다.')
     bus = getattr(main, 'buses', {}).get(packet['bus'])
     if bus is None:
@@ -130,7 +131,7 @@ class PacketRuntime:
         self.alive = 0
         self.lock = threading.RLock()
         if not hasattr(main, '_panel_bus_locks'):
-            main._panel_bus_locks = {bus: threading.RLock() for bus in (0, 1, 2, 3)}
+            main._panel_bus_locks = {bus: threading.RLock() for bus in PACKET_BUS_IDS}
         self.bus_lock = main._panel_bus_locks[packet['bus']]
 
     def stage(self, binding, value):

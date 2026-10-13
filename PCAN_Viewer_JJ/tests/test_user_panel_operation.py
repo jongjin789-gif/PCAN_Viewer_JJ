@@ -214,7 +214,7 @@ class PanelOperationTest(unittest.TestCase):
         with patch.object(main, 'close_can') as disconnect:
             main.user_panel_window.close()
             self.assertTrue(main._is_closing)
-            self.assertEqual(disconnect.call_count, 3)
+            self.assertEqual(disconnect.call_count, 4)
         self.assertFalse(main.user_panel_window.isVisible())
 
     def test_panel_only_session_keeps_dbc_and_configuration(self):

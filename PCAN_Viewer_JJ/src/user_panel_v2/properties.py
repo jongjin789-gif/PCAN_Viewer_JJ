@@ -1,3 +1,5 @@
+from src.bus_config import bitrate_value
+from src.bus_config import BUS_IDS
 """Docked tool editor and explicit, field-wise batch updates."""
 import copy
 
@@ -80,7 +82,7 @@ class ToolProperties(QWidget):
                      ("col", "Col", 0, self.panel.grid_cols - 1),
                      ("row_span", "Height (rows)", 1, self.panel.grid_rows),
                      ("col_span", "Width (cols)", 1, self.panel.grid_cols),
-                     ("bus", "RX CAN BUS", 1, 3)]
+                     ("bus", "RX CAN BUS", 1, max(BUS_IDS))]
             for key, label, low, high in specs:
                 field = QSpinBox()
                 field.setRange(low, high)
@@ -143,9 +145,8 @@ class ToolProperties(QWidget):
         data = combo.itemData(index)
         if isinstance(data, dict) and key in data:
             return int(data[key])
-        text = combo.itemText(index).lower().replace(" ", "")
         try:
-            return int(float(text.split("mbit")[0]) * 1000000) if "mbit" in text else int(float(text.split("kbit")[0]) * 1000)
+            return bitrate_value(combo.itemText(index))
         except ValueError:
             return 0
 

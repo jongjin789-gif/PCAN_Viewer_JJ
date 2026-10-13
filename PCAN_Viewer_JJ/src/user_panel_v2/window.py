@@ -1,3 +1,5 @@
+from src.bus_config import normalized_signature
+from src.bus_config import BUS_IDS
 from src.error_dialog import show_error
 import copy
 import json
@@ -272,7 +274,7 @@ class UserPanelWindow(QWidget):
         self.label_mode = QLabel()
         self.label_mode.setAlignment(Qt.AlignCenter)
         self.label_io = QLabel()
-        self.label_bus_states = {bus: QLabel() for bus in (1, 2, 3)}
+        self.label_bus_states = {bus: QLabel() for bus in BUS_IDS}
         self.init_control = SequenceControl(self, dict(title='RUN Init', is_init=True, binding={}))
         self.init_control.button.setEnabled(False)
         self.init_control.finished.connect(self._init_finished)
@@ -495,7 +497,7 @@ class UserPanelWindow(QWidget):
         main = self.main_window
         snapshot = tuple((bus, getattr(main, 'buses', {}).get(bus) is not None,
                           bool(getattr(main, 'bus_capabilities', {}).get(bus, {}).get('is_fd')))
-                         for bus in (1, 2, 3))
+                         for bus in BUS_IDS)
         for bus, opened, fd in snapshot:
             self.label_bus_states[bus].setText(f"BUS {bus}: {'연결 ' + ('FD' if fd else 'Classic') if opened else '미연결'}")
         if snapshot != self._bus_snapshot:
@@ -516,7 +518,7 @@ class UserPanelWindow(QWidget):
         dialog = ConnectionDialog(self)
         dialog.exec_()
         dialog.deleteLater()
-        if self.dbc_signature != database_signature(self.main_window):
+        if normalized_signature(self.dbc_signature) != normalized_signature(database_signature(self.main_window)):
             self.main_window.open_user_panel()
 
     def _check_init_connections(self):
@@ -1296,7 +1298,7 @@ class UserPanelWindow(QWidget):
         self.properties.setFocus()
 
     def refresh_dbc_bindings(self):
-        if self.dbc_signature != database_signature(self.main_window):
+        if normalized_signature(self.dbc_signature) != normalized_signature(database_signature(self.main_window)):
             if self.mode == 'run':
                 self.set_mode('standby')
             self.log_system('DBC/SYM 변경 감지: 패널을 다시 열 때 기존 이력 사용 여부를 확인합니다.', 'WARN')
@@ -2947,7 +2949,7 @@ class UserPanelWindow(QWidget):
         if not isinstance(data, dict):
             raise ValueError("Invalid panel file")
         self.setWindowTitle(str(data.get('title') or 'User Panel'))
-        self.dbc_signature = copy.deepcopy(data.get('dbc_signature', database_signature(self.main_window)))
+        self.dbc_signature = normalized_signature(copy.deepcopy(data.get('dbc_signature', database_signature(self.main_window))))
 
         self.stop_panel_commands('패널 불러오기')
         self._packet_runtimes.clear()
@@ -2979,7 +2981,7 @@ class UserPanelWindow(QWidget):
                     packet = find_packet(self.tx_packets, binding)
                     if packet:
                         bind_packet(binding, packet)
-                if self.dbc_signature == database_signature(self.main_window):
+                if normalized_signature(self.dbc_signature) == normalized_signature(database_signature(self.main_window)):
                     reconcile_binding(self.db_messages, binding)
         self.selected_widget_id = next((c['id'] for c in self.widgets_config if self._page_for(c) == self.active_page_id), None)
 

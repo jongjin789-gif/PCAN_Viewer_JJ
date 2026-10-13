@@ -1,3 +1,4 @@
+from src.bus_config import BUS_IDS
 """Compare database contents and precedence per BUS, independently of file paths."""
 import hashlib
 from pathlib import Path
@@ -13,9 +14,11 @@ def database_signature(main):
     if listings is None:
         return getattr(main, 'database_content_signature', None)
     result = {}
-    for bus in (1, 2, 3):
+    for bus in BUS_IDS:
         result[str(bus)] = []
-        listing = listings[bus]
+        listing = listings.get(bus)
+        if listing is None:
+            continue
         for index in range(listing.count()):
             item = listing.item(index)
             raw = item.data(Qt.UserRole + 2)

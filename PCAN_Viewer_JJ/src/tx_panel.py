@@ -1,3 +1,4 @@
+from src.bus_config import BUS_IDS
 from src.error_dialog import show_error
 import os
 import re
@@ -176,7 +177,7 @@ class TxPacketDialog(QDialog):
         
         # 1. CAN BUS
         self.combo_bus = QComboBox()
-        self.combo_bus.addItems(["1", "2", "3"])
+        self.combo_bus.addItems([str(b) for b in BUS_IDS])
         self.combo_bus.addItem('미선택', 0)
         self.combo_bus.currentIndexChanged.connect(self.on_bus_changed)
         form_layout.addRow("CAN BUS:", self.combo_bus)
@@ -852,7 +853,7 @@ class TxPacketItem(SortableTreeWidgetItem):
         self.setText(10, d["note"])
         
     def send_packet(self):
-        if self.packet_data.get('bus') not in (1, 2, 3):
+        if self.packet_data.get('bus') not in BUS_IDS:
             self.stop_timer()
             return
         bus_obj = self.tx_panel.buses.get(self.packet_data["bus"])
@@ -938,7 +939,7 @@ class TxPacketItem(SortableTreeWidgetItem):
                 self.tx_panel._update_action_button(self)
 
     def start_timer(self):
-        if self.packet_data.get('bus') not in (1, 2, 3):
+        if self.packet_data.get('bus') not in BUS_IDS:
             self.stop_timer()
             return
         cycle = self.packet_data["cycle"]
@@ -1519,7 +1520,7 @@ class TxPanel(QWidget):
                 "viewer_mode_only": viewer_mode,
                 "user_panel_only": panel_only,
                 "tx_packets": [], 
-                "db_files": {1: [], 2: [], 3: []}, 
+                "db_files": {b: [] for b in BUS_IDS},
                 "can_config": {}
             }
             
@@ -1536,7 +1537,7 @@ class TxPanel(QWidget):
                         if p: paths.append(p)
                     data_dict["db_files"][bus_num] = paths
                     
-                for b in range(1, 4):
+                for b in BUS_IDS:
                     data_dict["can_config"][str(b)] = {
                         "channel": main_win.combo_channels[b].currentText(),
                         "bitrate": main_win.combo_bitrate[b].currentText(),

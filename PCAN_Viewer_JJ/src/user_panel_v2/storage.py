@@ -1,3 +1,4 @@
+from src.bus_config import BUS_IDS
 import json
 import os
 import tempfile
@@ -23,14 +24,14 @@ def save_bundle(path, panel_data, db_paths_by_bus):
 
     manifest = {
         "format": "PJJ_USER_PANEL_PACKAGE",
-        "version": 1,
-        "db_files": {"1": [], "2": [], "3": []},
+        "version": 2,
+        "db_files": {str(b): [] for b in BUS_IDS},
     }
 
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("panel/panel.json", json.dumps(panel_data, indent=2))
 
-        for bus in (1, 2, 3):
+        for bus in BUS_IDS:
             paths = db_paths_by_bus.get(bus, []) if isinstance(db_paths_by_bus, dict) else []
             for i, src in enumerate(paths):
                 if not src or not os.path.exists(src):
@@ -55,7 +56,7 @@ def load_bundle(path):
         raise FileNotFoundError(path)
 
     temp_dir = tempfile.mkdtemp(prefix="pjjupkg_")
-    db_paths_by_bus = {1: [], 2: [], 3: []}
+    db_paths_by_bus = {b: [] for b in BUS_IDS}
 
     with zipfile.ZipFile(path, "r") as zf:
         with zf.open("manifest.json") as f:
@@ -64,7 +65,7 @@ def load_bundle(path):
         with zf.open("panel/panel.json") as f:
             panel_data = json.loads(f.read().decode("utf-8"))
 
-        for bus in (1, 2, 3):
+        for bus in BUS_IDS:
             for item in manifest.get("db_files", {}).get(str(bus), []):
                 arc_name = item.get("arc_name")
                 if not arc_name:

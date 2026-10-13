@@ -212,7 +212,7 @@ class LogViewerWindow(QMainWindow):
             self.tree.blockSignals(False)
         
     def start_parsing(self):
-        self.progress = QProgressDialog("Parsing TRC log file...", "Cancel", 0, 100, self)
+        self.progress = QProgressDialog("Parsing CAN log file...", "Cancel", 0, 100, self)
         self.progress.setWindowModality(Qt.WindowModal)
         
         self.parser_thread = LogParserThread(self.file_path, self.db_messages)
@@ -252,7 +252,7 @@ class LogViewerWindow(QMainWindow):
         self.log_table.setRowCount(total)
 
         self._populate_index = 0
-        self._populate_progress = QProgressDialog("Rendering TRC log entries...", None, 0, total, self)
+        self._populate_progress = QProgressDialog("Rendering CAN log entries...", None, 0, total, self)
         self._populate_progress.setWindowModality(Qt.WindowModal)
         self._populate_progress.setCancelButton(None)
         self._populate_progress.show()
@@ -390,7 +390,7 @@ class LogViewerWindow(QMainWindow):
             QMessageBox.information(self, "Save", "저장할 필터 결과가 없습니다.")
             return
         stem, ext = os.path.splitext(self.file_path)
-        path, _ = QFileDialog.getSaveFileName(self, "Save filtered log", stem + "_filtered" + ext, "Trace log (*.trc);;All files (*)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save filtered log", stem + "_filtered" + ext, "CAN log (*.trc *.txt);;All files (*)")
         if not path:
             return
         if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(self.file_path)):
@@ -405,6 +405,7 @@ class LogViewerWindow(QMainWindow):
     def export_filtered_log(self, path, logs=None):
         logs = self.get_visible_log_data() if logs is None else logs
         selected = {entry['source_line'] for entry in logs}
+        is_logger = bool(logs and logs[0].get('format') == 'cl2000')
         # Copy original bytes, including header, timestamps, flags and line endings.
         with open(self.file_path, 'rb') as source:
             lines = source.readlines()
@@ -413,12 +414,15 @@ class LogViewerWindow(QMainWindow):
         for line_number, line in enumerate(lines, 1):
             if line_number in selected:
                 number += 1
+                if is_logger:
+                    output.append(line)
+                    continue
                 line, replaced = re.subn(rb'^(\s*)\d+(\)?)(?=\s)',
                                         lambda m: m[1] + str(number).encode('ascii') + m[2], line, count=1)
                 if replaced != 1:
                     raise ValueError(f"원본 {line_number}행의 메시지 번호를 확인할 수 없습니다.")
                 output.append(line)
-            elif not line.strip() or line.lstrip().removeprefix(b'\xef\xbb\xbf').startswith(b';'):
+            elif not line.strip() or line.lstrip().removeprefix(b'\xef\xbb\xbf').startswith((b';', b'#', b'Timestamp;Type;ID;Data')):
                 output.append(line)
         if number != len(logs):
             raise ValueError("원본 로그가 변경되었습니다. 다시 불러온 뒤 저장해주세요.")
@@ -570,7 +574,7 @@ class LogViewerWindow(QMainWindow):
 
             is_fd = 'F' in msg_type or 'B' in msg_type or 'E' in msg_type or log_entry['dlc'] > 8
             is_brs = 'B' in msg_type
-            msg = can.Message(arbitration_id=log_entry['can_id'], data=log_entry['data'], is_extended_id=log_entry['can_id'] > 0x7FF, is_fd=is_fd, bitrate_switch=is_brs)
+            msg = can.Message(arbitration_id=log_entry['can_id'], data=log_entry['data'], is_extended_id=log_entry.get('is_extended_id', log_entry['can_id'] > 0x7FF), is_fd=is_fd, bitrate_switch=is_brs)
             bus_obj.send(msg)
 
             if hasattr(self.main_window, 'record_tx_activity'):
@@ -653,7 +657,7 @@ class LogViewerWindow(QMainWindow):
             msg_type = current_log['type']
             is_fd = 'F' in msg_type or 'B' in msg_type or 'E' in msg_type or current_log['dlc'] > 8
             is_brs = 'B' in msg_type
-            msg = can.Message(arbitration_id=current_log['can_id'], data=current_log['data'], is_extended_id=current_log['can_id'] > 0x7FF, is_fd=is_fd, bitrate_switch=is_brs)
+            msg = can.Message(arbitration_id=current_log['can_id'], data=current_log['data'], is_extended_id=current_log.get('is_extended_id', current_log['can_id'] > 0x7FF), is_fd=is_fd, bitrate_switch=is_brs)
             try:
                 bus_obj.send(msg)
                 if hasattr(self.main_window, 'record_tx_activity'):

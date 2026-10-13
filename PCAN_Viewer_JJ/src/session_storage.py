@@ -6,6 +6,8 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import copy
+from src.bus_config import BUS_IDS, default_can_config
 
 EXTENSION = '.pjjsettings'
 FORMAT = 'PCAN_VIEWER_SESSION'
@@ -48,11 +50,21 @@ def compile_formula(expr, signal_count):
 
 
 def validate_structure(data):
-    if not isinstance(data, dict) or data.get('format') != FORMAT or data.get('version') != 1:
+    if (not isinstance(data, dict) or data.get('format') != FORMAT
+            or type(data.get('version')) is not int or data['version'] not in (1, 2)):
         raise ValueError('지원하지 않는 통합 설정 파일 형식/버전입니다.')
+    expected = {'1', '2', '3'} if data['version'] == 1 else {str(b) for b in BUS_IDS}
     for key in ('databases', 'can'):
-        if not isinstance(data.get(key), dict) or set(data[key]) != {'1', '2', '3'}:
-            raise ValueError(f'{key}: BUS 1·2·3 설정이 필요합니다.')
+        if not isinstance(data.get(key), dict) or set(data[key]) != expected:
+            raise ValueError(f'{key}: BUS {", ".join(sorted(expected))} 설정이 필요합니다.')
+    if data['version'] == 1:
+        data = copy.deepcopy(data)
+        data['version'] = 2
+        data['databases']['4'] = []
+        data['can']['4'] = default_can_config()
+    ui = data.get('ui', {})
+    if not isinstance(ui, dict) or type(ui.get('dbc_collapsed', False)) is not bool:
+        raise ValueError('DBC 접기 설정이 올바르지 않습니다.')
     for key in ('graphs', 'tx_packets'):
         if not isinstance(data.get(key), list):
             raise ValueError(f'{key}: 목록이 필요합니다.')
@@ -143,7 +155,7 @@ def validate_panel(data):
 
 
 def serialize(data):
-    validate_structure(data)
+    data = validate_structure(data)
     raw = json.dumps(data, ensure_ascii=False, allow_nan=False, indent=2).encode('utf-8')
     if len(raw) > MAX_BYTES:
         raise ValueError('설정 파일은 64 MiB를 넘을 수 없습니다.')

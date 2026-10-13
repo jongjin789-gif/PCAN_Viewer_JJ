@@ -1,5 +1,7 @@
+from src.bus_config import BUS_IDS, PACKET_BUS_IDS
 """Main-window session coordinator: validate first, then replace and reconnect."""
 import copy
+import json
 import hashlib
 import os
 import platform
@@ -116,9 +118,10 @@ class SessionManager(QObject):
             panel_state = dict(data=copy.deepcopy(panel._panel_data()), visible=panel.isVisible(),
                                geometry=panel.geometry().getRect())
             panel_state['data']['mode'] = 'standby'
-        return dict(format=FORMAT, version=1, databases=databases,
-                    can={str(b): self.capture_can(b) for b in (1, 2, 3)},
-                    tx_packets=packets, graphs=graphs, panel=panel_state)
+        return dict(format=FORMAT, version=2, databases=databases,
+                    can={str(b): self.capture_can(b) for b in BUS_IDS},
+                    tx_packets=packets, graphs=graphs, panel=panel_state,
+                    ui=dict(dbc_collapsed=m.db_group.is_collapsed()))
 
     def autosave(self):
         if (not self.ready or not self.enabled or self.busy or self.main.viewer_only
@@ -160,10 +163,10 @@ class SessionManager(QObject):
         from src.user_panel import UserPanelWindow
         from src.user_panel_v2.packets import validate_packet, UnregisteredPacketError
         from src.user_panel_v2.sequence import validate_steps
-        validate_structure(data)
-        prepared = dict(databases={}, messages={1: {}, 2: {}, 3: {}}, graphs=[], panel=None)
+        data = validate_structure(data)
+        prepared = dict(databases={}, messages={b: {} for b in BUS_IDS}, graphs=[], panel=None)
         issues = []
-        for bus in (1, 2, 3):
+        for bus in BUS_IDS:
             prepared['databases'][bus] = []
             for entry in data['databases'][str(bus)]:
                 try:
@@ -176,8 +179,8 @@ class SessionManager(QObject):
                     issues.append(f'BUS {bus} / {entry["name"]}: {exc}')
         for i, packet in enumerate(data['tx_packets']):
             try:
-                if packet['bus'] not in (0, 1, 2, 3):
-                    raise ValueError('BUS는 미선택 또는 1~3이어야 합니다.')
+                if packet['bus'] not in PACKET_BUS_IDS:
+                    raise ValueError('BUS는 미선택 또는 1~4이어야 합니다.')
                 if not isinstance(packet.get('symbol'), str) or not isinstance(packet.get('note'), str):
                     raise ValueError('심볼과 메모는 문자열이어야 합니다.')
                 validate_packet(packet, prepared['messages'])
@@ -203,8 +206,8 @@ class SessionManager(QObject):
                 # No connected hardware or callbacks during validation/construction.
                 from .user_panel_v2.dbc_identity import database_token
                 db_signature = {str(bus): [database_token(entry['name'], raw)
-                    for entry, raw, db in prepared['databases'][bus]] for bus in (1, 2, 3)}
-                proxy = SimpleNamespace(buses={1: None, 2: None, 3: None},
+                    for entry, raw, db in prepared['databases'][bus]] for bus in BUS_IDS}
+                proxy = SimpleNamespace(buses={b: None for b in BUS_IDS},
                                         db_messages=prepared['messages'], database_content_signature=db_signature)
                 panel = UserPanelWindow(proxy, prepared['messages'],
                                         security_config=self.main.user_panel_security)
@@ -327,7 +330,7 @@ class SessionManager(QObject):
         m.user_frame_properties.clear()
         m._graph_pending_frames.clear()
         m.tx_panel.tree.clear()
-        for bus in (1, 2, 3):
+        for bus in BUS_IDS:
             m.list_db_files[bus].clear()
             m.db_messages[bus].clear()
 
@@ -373,6 +376,7 @@ class SessionManager(QObject):
                 errors.append('재연결에 실패했습니다')
         if errors:
             m.close_can(bus)
+            m.log_bus_event(bus, '설정 복원: ' + '; '.join(errors), 'ERROR')
             self.errors.append(f'BUS {bus}: Close — ' + '; '.join(errors))
         actual = dict(device=device_identity(combo.currentData()), channel=combo.currentText(),
                       bitrate=m.combo_bitrate[bus].currentText(), fd_iso=m.combo_fd_iso[bus].currentText(),
@@ -383,9 +387,11 @@ class SessionManager(QObject):
     def apply(self, data, prepared):
         m = self.main
         self.clear_live()
+        m.bus_issues.clear()
+        m.db_group.set_collapsed(data.get('ui', {}).get('dbc_collapsed', False))
         m.search_can_channels()
         self.pending_can.clear()
-        for bus in (1, 2, 3):
+        for bus in BUS_IDS:
             for entry, raw, db in prepared['databases'][bus]:
                 m.install_database(db, bus, entry['name'], raw, '', entry['id'])
         for packet in data['tx_packets']:
@@ -406,8 +412,9 @@ class SessionManager(QObject):
             graph._panel_only_hidden = bool(getattr(m, 'user_panel_only', False))
             if not getattr(m, 'user_panel_only', False):
                 graph.show()
-        for bus in (1, 2, 3):
+        for bus in BUS_IDS:
             self.apply_can(bus, data['can'][str(bus)])
+            m.bus_state_changed.emit(bus)
         m.btn_open_log.setEnabled(any(m.db_messages.values()))
         m.tx_panel.update_all_action_buttons()
 
@@ -421,6 +428,11 @@ class SessionManager(QObject):
             backup = self.capture()
             backup_prepared = self.prepare(backup, strict=False)
             self.preserve_record()
+            original = Path(path).read_bytes()
+            if json.loads(original).get('version') == 1:
+                legacy_backup = Path(str(path) + '.v1.bak')
+                if not legacy_backup.exists():
+                    atomic_write(legacy_backup, original)
         except Exception as exc:
             if prepared:
                 self.dispose(prepared)
@@ -462,7 +474,7 @@ class SessionManager(QObject):
         if startup:
             issues = [issue for issue in issues if '저장된 장치를 찾을 수 없습니다' not in issue]
         if issues:
-            status = [f'BUS {b}: {"Open" if self.main.buses[b] else "Close"}' for b in (1, 2, 3)]
+            status = [f'BUS {b}: {"Open" if self.main.buses[b] else "Close"}' for b in BUS_IDS]
             self.report('통합 불러오기 결과',
                         '설정을 적용했습니다. 아래 항목을 확인하세요.' if success else '설정 적용에 실패했습니다.',
                         issues + status)
@@ -471,7 +483,7 @@ class SessionManager(QObject):
     def export_databases(self, bus=None, selected=False):
         m = self.main
         entries = []
-        for b in ((bus,) if bus else (1, 2, 3)):
+        for b in ((bus,) if bus else BUS_IDS):
             listing = m.list_db_files[b]
             items = listing.selectedItems() if selected else [listing.item(i) for i in range(listing.count())]
             entries.extend((b, item) for item in items)

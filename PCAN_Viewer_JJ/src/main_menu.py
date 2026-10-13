@@ -1,3 +1,4 @@
+from src.bus_config import BUS_IDS
 """Menu actions share the existing buttons' availability and behavior."""
 import sys
 from pathlib import Path
@@ -8,6 +9,7 @@ from src.utils import get_resource_path
 def install_main_menu(main):
     bar = main.menuBar()
     mirrored = []
+    availability = []
 
     def action(menu, text, callback, button=None, shortcut=None):
         item = QAction(text, main)
@@ -29,7 +31,7 @@ def install_main_menu(main):
     action(files, '종료', main.close)
 
     database = bar.addMenu('데이터베이스')
-    for bus in (1, 2, 3):
+    for bus in BUS_IDS:
         menu = database.addMenu(f'BUS {bus}')
         action(menu, 'DBC/SYM 등록…', main.btn_load_db[bus].click, main.btn_load_db[bus])
         action(menu, '선택 DB 등록 해제', lambda b=bus: main.remove_selected_db_file(b))
@@ -41,11 +43,13 @@ def install_main_menu(main):
 
     if not main.viewer_only:
         can_menu = bar.addMenu('CAN')
-        for bus in (1, 2, 3):
+        for bus in BUS_IDS:
             menu = can_menu.addMenu(f'BUS {bus}')
-            for label, button in (('장치 검색', main.btn_refresh[bus]),
-                                  ('연결', main.btn_open[bus]), ('연결 해제', main.btn_close[bus])):
-                action(menu, label, button.click, button)
+            action(menu, '장치 검색', lambda b=bus: main.search_can_channels(b), main.btn_refresh[bus])
+            opened = action(menu, '연결', lambda b=bus: main.open_can(b))
+            closed = action(menu, '연결 해제', lambda b=bus: main.close_can(b))
+            availability.append((opened, lambda b=bus: main.can_open(b)))
+            availability.append((closed, lambda b=bus: main.buses[b] is not None and b not in main._bus_busy))
         action(can_menu, '전체 연결 해제', main.close_can)
         tx = bar.addMenu('송신')
         for label, button in (('패킷 생성…', main.tx_panel.btn_add),
@@ -70,11 +74,13 @@ def install_main_menu(main):
                              ('변경 내역', 'USER_PANEL_RELEASE_NOTES.md')):
         action(help_menu, label, lambda name=filename, title=label: show_document(main, name, title))
     action(help_menu, '프로그램 정보', lambda: QMessageBox.information(
-        main, '프로그램 정보', f'PCAN Viewer JJ {main.get_app_version()}\n통합 설정 형식: v1 (.pjjsettings)'))
+        main, '프로그램 정보', f'PCAN Viewer JJ {main.get_app_version()}\n통합 설정 형식: v2 (.pjjsettings) / v1 불러오기 지원'))
 
     def refresh():
         for item, button in mirrored:
             item.setEnabled(button.isEnabled())
+        for item, predicate in availability:
+            item.setEnabled(predicate())
     # Refresh on opening any menu, including submenus, to match the controls.
     def connect_menu(menu):
         menu.aboutToShow.connect(refresh)

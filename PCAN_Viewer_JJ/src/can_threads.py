@@ -150,6 +150,8 @@ class LogParserThread(QThread):
             base_time = 0.0
             fallback_base_time = 0.0
             last_offset_ms = 0.0
+            logger_columns = None
+            logger_start = None
 
             try:
                 fallback_base_time = os.path.getmtime(self.file_path)
@@ -187,13 +189,39 @@ class LogParserThread(QThread):
                             pass
                         continue
 
-                    line = line.strip()
-                    if not line or line.startswith(';'):
+                    line = line.strip().lstrip('\ufeff')
+                    if not line or line.startswith((';', '#')):
+                        continue
+
+                    if line == 'Timestamp;Type;ID;Data':
+                        logger_columns = True
                         continue
 
                     tokens = line.split()
                     
                     try:
+                        logger_extended = None
+                        logger_direction = None
+                        if logger_columns:
+                            stamp, frame_type, identifier, payload = line.split(';')
+                            # CL2000 time format 6, as used by the logger TXT file.
+                            frame_dt = datetime.datetime.strptime(stamp, '%Y_%m_%dT%H_%M_%S_%f')
+                            flags = int(frame_type, 16)
+                            if flags not in (0, 1, 8, 9):
+                                raise ValueError('Unsupported CL2000 frame type')
+                            logger_extended = bool(flags & 1)
+                            logger_direction = 'Tx' if flags & 8 else 'Rx'
+                            identifier_value = int(identifier, 16)
+                            payload_bytes = bytes.fromhex(payload)
+                            if identifier_value < 0 or identifier_value > (0x1FFFFFFF if logger_extended else 0x7FF) or len(payload_bytes) > 8:
+                                raise ValueError('Invalid CL2000 CAN frame')
+                            if logger_start is None:
+                                logger_start = frame_dt
+                                base_time = frame_dt.timestamp()
+                            relative_ms = round((frame_dt - logger_start).total_seconds() * 1000)
+                            tokens = [str(i), str(relative_ms), 'DT', '1', identifier,
+                                      logger_direction, '-', str(len(payload_bytes)),
+                                      *payload_bytes.hex(' ').split()]
                         if base_time == 0.0:
                             base_time = fallback_base_time
 
@@ -245,6 +273,10 @@ class LogParserThread(QThread):
                         log_line_data = {"timestamp": ts, "offset_ms": offset_ms, "type": msg_type, "bus": bus_num, "can_id": can_id, "dlc": dlc, "data": data}
                         raw_log_lines.append(log_line_data)
                         log_line_data['source_line'] = i
+                        if logger_columns:
+                            log_line_data['format'] = 'cl2000'
+                            log_line_data['is_extended_id'] = logger_extended
+                            log_line_data['direction'] = logger_direction
 
                         if bus_num in self.db_messages and can_id in self.db_messages[bus_num]:
                             found_msgs.add((bus_num, can_id))

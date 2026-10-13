@@ -20,7 +20,7 @@
 ## ✨ 주요 기능 (Features)
 
 - **크로스 플랫폼 지원**: Windows(PEAK-System PCAN) 및 Linux(SocketCAN / vcan) 환경에서 동일한 UI 및 기능 제공.
-- **멀티 채널 모니터링**: 최대 3개의 CAN 버스 채널을 동시에 연결하고 모니터링 가능.
+- **멀티 채널 모니터링**: 4개의 CAN 버스 채널을 동시에 연결하고 모니터링 가능.
 - **CAN FD 지원**: Classic CAN 뿐만 아니라 CAN FD(Flexible Data-rate) 통신 및 ISO/Non-ISO, Data Bitrate 설정 지원.
 - **CAN 송신 (Tx) 및 패킷 관리**: 송신 패킷을 생성하여 CAN/FD 프레임 전송 가능. DBC 심볼과 연동하여 물리 값을 입력하면 자동으로 Raw Data(HEX) 연산 처리. Cycle Time 지원, 단축키(스페이스바 단발 전송, Ctrl+C/V 복사 붙여넣기, Delete 삭제) 지원, `.xmt` 파일 저장/불러오기 지원.
 - **자동 상태 저장 및 복구**: 사용자 데이터 폴더의 통합 세션에 장치/속도, DB, 패킷, 그래프, 유저패널 구성을 저장합니다. Windows는 저장 당시 연결된 BUS를 재연결하고, Linux는 장치/속도만 복원한 뒤 BUS를 Close 상태로 시작합니다.

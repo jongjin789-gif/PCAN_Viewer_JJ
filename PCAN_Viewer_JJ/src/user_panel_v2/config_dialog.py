@@ -1,3 +1,4 @@
+from src.bus_config import BUS_IDS
 import uuid
 import copy
 from .binding import matching_signal, validate_config
@@ -151,7 +152,7 @@ class WidgetConfigDialog(QDialog):
         self.combo_value_precision.currentIndexChanged.connect(self._on_precision_changed)
 
         self.combo_bus = QComboBox()
-        self.combo_bus.addItems(["1", "2", "3"])
+        self.combo_bus.addItems([str(b) for b in BUS_IDS])
         self.combo_bus.currentIndexChanged.connect(self._on_bus_changed)
         form_comm.addRow("CAN Bus", self.combo_bus)
 
