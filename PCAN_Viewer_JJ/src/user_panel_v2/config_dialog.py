@@ -972,7 +972,12 @@ class WidgetConfigDialog(QDialog):
         self._on_message_changed()
 
     def _on_bus_changed(self):
-        self._load_db_messages()
+        if self._loading:
+            self._load_db_messages()
+            return
+        config = self.get_config(strict=False, resolve_packet=False)
+        if config is not None:
+            self.set_config(config)
 
     def _on_message_changed(self):
         self.combo_signal.blockSignals(True)
@@ -1020,6 +1025,8 @@ class WidgetConfigDialog(QDialog):
             self._update_visibility()
             return
 
+        self._dbc_manual_binding = False
+
         msg = self.db_messages.get(bus, {}).get(can_id)
         if not msg:
             return
@@ -1062,20 +1069,24 @@ class WidgetConfigDialog(QDialog):
             spin.setRange(-1000000.0, 1000000.0)
             spin.setDecimals(self._precision_decimals())
 
-    def _match_bit_fields(self, *_args):
+    def _match_bit_fields(self, *_args, expected_signal=None):
         if self._loading or self._mapping_sync:
             return
         can_id = self._parse_can_id(strict=False)
         binding = dict(bus=int(self.combo_bus.currentText()), can_id=can_id or 0,
                        start_bit=self.spin_start_bit.value(), bit_length=self.spin_bit_length.value(),
                        byte_order=self.combo_byte_order.currentData(),
-                       signal_name=self.combo_signal.currentData())
-        sig = matching_signal(self.db_messages, binding) if can_id is not None else None
+                       signal_name=expected_signal or self.combo_signal.currentData(),
+                       dbc_manual=getattr(self, '_dbc_manual_binding', False))
+        sig = matching_signal(self.db_messages, binding, require_name=expected_signal is not None) if can_id is not None else None
+        if expected_signal is not None and sig is None:
+            self._dbc_manual_binding = True
         self._mapping_sync = True
         try:
             self.combo_message.blockSignals(True)
             index = self.combo_message.findData(can_id)
-            self.combo_message.setCurrentIndex(max(0, index))
+            registered_tx = self.combo_behavior.currentText() == 'tx' and self.tx_packets is not None
+            self.combo_message.setCurrentIndex(max(0, index) if sig or registered_tx else 0)
             self.combo_message.blockSignals(False)
             self.combo_signal.blockSignals(True)
             self.combo_signal.clear()
@@ -1093,7 +1104,7 @@ class WidgetConfigDialog(QDialog):
             self._mapping_sync = False
         self._update_visibility()
 
-    def get_config(self, strict=True):
+    def get_config(self, strict=True, resolve_packet=True):
         if strict and self.combo_widget_type.currentText() == "sequence":
             from .sequence import validate_steps
             try:
@@ -1134,6 +1145,7 @@ class WidgetConfigDialog(QDialog):
                 "bus": int(self.combo_bus.currentText()),
                 "can_id": int(can_id),
                 "signal_name": self.combo_signal.currentData(),
+                **({'dbc_manual': True} if getattr(self, '_dbc_manual_binding', False) else {}),
                 "dlc": int(self.spin_dlc.value()),
                 "is_fd": is_fd,
                 "brs": is_fd and self.chk_brs.isChecked(),
@@ -1173,7 +1185,7 @@ class WidgetConfigDialog(QDialog):
             },
         }
 
-        if config['behavior'] == 'tx' and config['widget_type'] != 'sequence' and self.tx_packets is not None:
+        if resolve_packet and config['behavior'] == 'tx' and config['widget_type'] != 'sequence' and self.tx_packets is not None:
             packet = find_packet(self.tx_packets, config['binding'])
             if packet is None:
                 if strict:
@@ -1205,6 +1217,7 @@ class WidgetConfigDialog(QDialog):
         self.combo_widget_type.setCurrentText(config.get("widget_type", self.combo_widget_type.currentText()))
 
         binding = config.get("binding", {})
+        self._dbc_manual_binding = binding.get('dbc_manual', False)
         self.sequence_steps = copy.deepcopy(binding.get("sequence_steps", []))
         self.sequence_failure_steps = copy.deepcopy(binding.get('sequence_failure_steps', []))
         precision_decimals = int(binding.get("value_precision_decimals", 3) or 3)
@@ -1265,7 +1278,7 @@ class WidgetConfigDialog(QDialog):
         self.combo_signal.setCurrentIndex(max(0, self.combo_signal.findData(binding.get("signal_name"))))
         self.combo_signal.blockSignals(False)
         self._loading = False
-        self._match_bit_fields()
+        self._match_bit_fields(expected_signal=binding.get('signal_name'))
         self._loading = was_loading
 
         self._set_enum_selection_by_value(self.combo_press_enum, self.spin_press_value.value())

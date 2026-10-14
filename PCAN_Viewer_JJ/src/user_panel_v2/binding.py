@@ -20,7 +20,9 @@ def bit_positions(binding, payload_length):
     return positions
 
 
-def matching_signal(db_messages, binding):
+def matching_signal(db_messages, binding, require_name=False):
+    if binding.get('dbc_manual'):
+        return None
     message = db_messages.get(int(binding.get("bus", 1)), {}).get(int(binding.get("can_id", 0)))
     if message is None:
         return None
@@ -29,11 +31,13 @@ def matching_signal(db_messages, binding):
                and int(s.length) == int(binding.get("bit_length", 8))
                and s.byte_order == binding.get("byte_order", "little_endian")]
     named = [s for s in matches if s.name == binding.get("signal_name")]
+    if require_name and binding.get('signal_name'):
+        return named[0] if named else None
     return named[0] if named else (matches[0] if len(matches) == 1 else None)
 
 
 def reconcile_binding(db_messages, binding):
-    signal = matching_signal(db_messages, binding)
+    signal = matching_signal(db_messages, binding, require_name=True)
     binding["signal_name"] = signal.name if signal else None
     return signal
 

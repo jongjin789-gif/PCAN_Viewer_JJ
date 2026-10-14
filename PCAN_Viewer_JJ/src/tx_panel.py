@@ -10,7 +10,7 @@ import json
 import math
 import base64
 from src.tx_counter import counter_payload, latest_rx_payload
-from src.db_frame_format import message_is_fd
+from src.db_frame_format import message_is_fd, compatible_signal_mapping
 from src.tx_crc import validate_crc, crc_order
 from src.tx_crc_dialog import SignalCRCDialog
 from PyQt5.QtWidgets import *
@@ -329,22 +329,14 @@ class TxPacketDialog(QDialog):
             return
         if not getattr(self, '_preserve_packet_format', False):
             return self._refresh_bus_fields()
-        frame_type = self.combo_type.currentText()
-        brs = self.check_brs.isChecked()
-        length = self.combo_length.currentText()
-        payload = self.edit_data.text()
-        self._refresh_bus_fields()
-        self._updating = True
-        self.combo_type.setCurrentText(frame_type)
-        self._updating = False
-        self.on_type_changed()
-        self._updating = True
-        self.check_brs.setChecked(brs)
-        self.combo_length.setCurrentText(length)
-        self.edit_data.setText(payload)
-        self._last_data_text_len = len(payload)
-        self._updating = False
-        self.on_data_edited()
+        packet = TxPacketDialog.get_packet_data(self)
+        source = self.current_db_msg
+        target = self.db_messages.get(packet['bus'], {}).get(packet['id'])
+        names = self.bus_signal_names() if hasattr(self, 'bus_signal_names') else None
+        if source is not None and not compatible_signal_mapping(source, target, names):
+            packet['dbc_manual'] = True
+            packet['signal_counters'] = {}
+        self.set_packet_data(packet)
         self.update_data_range_label()
 
     def _refresh_bus_fields(self):
@@ -368,6 +360,7 @@ class TxPacketDialog(QDialog):
         
     def on_symbol_changed(self):
         if self._updating: return
+        self._dbc_manual = False
         can_id = self.combo_symbol.currentData()
         if can_id is not None:
             self._updating = True
@@ -446,6 +439,8 @@ class TxPacketDialog(QDialog):
             
     def on_id_edited(self):
         if self._updating: return
+        if getattr(self, '_dbc_manual', False):
+            return
         id_text = self.edit_id.text().strip()
         try: can_id = int(id_text, 16)
         except ValueError:
@@ -716,11 +711,13 @@ class TxPacketDialog(QDialog):
             "bus": bus_num, "id": can_id, "is_fd": is_fd, "is_brs": is_brs, "length": total_length,
             "data": full_data, "cycle": self.edit_cycle.value(),
             "signal_counters": self.get_counters(),
+            **({'dbc_manual': True} if getattr(self, '_dbc_manual', False) else {}),
             "note": self.edit_note.text().strip(), "symbol": symbol, "count": 0, "crc_type": crc_type
         }
 
     def set_packet_data(self, data):
         self._preserve_packet_format = True
+        self._dbc_manual = data.get('dbc_manual', False)
         self._updating = True
         
         # 1. CAN BUS 설정
@@ -745,7 +742,7 @@ class TxPacketDialog(QDialog):
         self.edit_id.setText(f"{data['id']:X}" if data["id"] > 0 else "")
         
         idx = self.combo_symbol.findData(data["id"])
-        if idx >= 0:
+        if idx >= 0 and not self._dbc_manual:
             self.combo_symbol.setCurrentIndex(idx)
             self.current_db_msg = self.db_messages[bus_num][data["id"]]
             
@@ -975,24 +972,24 @@ class TxPanel(QWidget):
         self.btn_clear_all = QPushButton("Clear All Packets")
         
         decorate_button(self.btn_add, 'packet_add', '송신 패킷을 만듭니다.', 'Add Packet')
-        decorate_button(self.btn_load, 'document_open', '송신 패킷 목록을 불러옵니다.', 'Load TX')
-        decorate_button(self.btn_save, 'save', '송신 패킷 목록을 저장합니다.', 'Save TX')
-        decorate_button(self.btn_clear_all, 'trash', '송신 패킷을 모두 삭제합니다.', 'TX Clear')
+        decorate_button(self.btn_load, 'document_open', '송신 패킷 목록을 불러옵니다.', 'Load')
+        decorate_button(self.btn_save, 'save', '송신 패킷 목록을 저장합니다.', 'Save')
+        decorate_button(self.btn_clear_all, 'trash', '송신 패킷을 모두 삭제합니다.', 'Clear')
         self.btn_add.clicked.connect(self.on_add_packet)
         self.btn_load.clicked.connect(self.on_load_packets)
         self.btn_save.clicked.connect(self.on_save_packets)
         self.btn_clear_all.clicked.connect(self.on_clear_all_packets)
         
         self.toolbar.addWidget(self.btn_add)
+        self.toolbar.addWidget(self.btn_clear_all)
         self.toolbar.addSpacing(20)
         self.toolbar.addWidget(self.btn_load)
         self.toolbar.addWidget(self.btn_save)
         self.toolbar.addStretch()
-        self.toolbar.addWidget(self.btn_clear_all)
         layout.addLayout(self.toolbar)
         
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["CAN BUS", "CAN ID", "CAN Type", "BRS", "Data Length", "Packet Type", "dbc Symbol", "Data", "Cycle Time", "Count", "Note", "Action"])
+        self.tree.setHeaderLabels(["CAN BUS", "CAN ID", "CAN Type", "BRS", "Length", "Packet Type", "DBC Symbol", "Data", "Cycle (ms)", "Count", "Note", "Action"])
         self.tree.setColumnWidth(0, 70)
         self.tree.setColumnWidth(1, 80)
         self.tree.setColumnWidth(2, 70)

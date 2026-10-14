@@ -1,7 +1,9 @@
 import copy
+import json
 from PyQt5.QtCore import Qt, QEvent, QItemSelectionModel
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
-    QTableWidgetItem, QComboBox, QLineEdit, QSpinBox, QLabel, QMessageBox, QCheckBox, QHeaderView)
+    QTableWidgetItem, QComboBox, QLineEdit, QSpinBox, QLabel, QMessageBox, QCheckBox, QHeaderView, QApplication)
 from src.tx_panel import TxPacketDialog
 from .sequence import validate_steps, format_can_id
 from .inline_editor import show_inline_editor
@@ -142,6 +144,28 @@ class SequencePacketDialog(TxPacketDialog):
             self.table_signals.setEnabled(not self.direct_input.isChecked())
             self.edit_data.setEnabled(not self.direct_input.isChecked())
 
+    def bus_signal_names(self):
+        if not self.receive_mode or not self.current_db_msg:
+            return None
+        return [sig.name for sig in self.current_db_msg.signals
+                if any(a & b for a, b in zip(signal_mask(sig, self.current_db_msg.length), self.saved_mask))]
+
+    def on_bus_changed(self):
+        if not self._updating and self.receive_mode and hasattr(self, 'direct_input'):
+            packet = TxPacketDialog.get_packet_data(self)
+            self.saved_mask = self.comparison(packet)[0]
+            if self.direct_input.isChecked():
+                data, _ = self.masked_input.values(packet['length'])
+                self._updating = True
+                self.edit_data.setText(' '.join(f'{b:02X}' for b in data))
+                self._updating = False
+        super().on_bus_changed()
+        self._mark_signals()
+        if self.receive_mode and hasattr(self, 'direct_input') and self.current_db_msg is None:
+            packet = TxPacketDialog.get_packet_data(self)
+            self.masked_input.set_data(packet['data'], self.saved_mask, self.masked_input.mode)
+            self.direct_input.setChecked(True)
+
     def _suggest_extended(self):
         try:
             if int(self.edit_id.text(), 16) > 0x7FF:
@@ -259,6 +283,7 @@ class SequenceDialog(QDialog):
         layout = QVBoxLayout(self)
         toolbar = QHBoxLayout()
         for title, action in (("생성", self.add), ("삭제", self.delete),
+                              ("복사", self.copy_row), ("붙여넣기", self.paste_row),
                               ("위로", lambda: self.move(-1)), ("아래로", lambda: self.move(1))):
             button = QPushButton(title)
             button.clicked.connect(action)
@@ -278,6 +303,8 @@ class SequenceDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["종류", "생성 / 편집", "명령어 / 응답 이름", "명령어 뷰어"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.installEventFilter(self)
+        self.table.setToolTip('Ctrl+C: 선택 단계 복사 / Ctrl+V: 선택 단계 아래에 붙여넣기')
         self.table.setStyleSheet(
             'QTableWidget::item:selected { background: palette(base); color: palette(text); }')
         self.table.verticalHeader().setMinimumWidth(48)
@@ -343,6 +370,16 @@ class SequenceDialog(QDialog):
         self.update_selection()
 
     def eventFilter(self, obj, event):
+        if event.type() in (QEvent.ShortcutOverride, QEvent.KeyPress):
+            is_copy = event.matches(QKeySequence.Copy)
+            is_paste = event.matches(QKeySequence.Paste)
+            text_editing = isinstance(obj, QLineEdit) and (
+                not obj.isReadOnly() or (is_copy and obj.hasSelectedText()))
+            if (is_copy or is_paste) and not text_editing:
+                if event.type() == QEvent.KeyPress:
+                    (self.copy_row if is_copy else self.paste_row)()
+                event.accept()
+                return True
         if event.type() in (QEvent.MouseButtonPress, QEvent.FocusIn) and not getattr(self, '_selecting_row', False):
             row = obj.property('sequenceRow')
             if row is not None and 0 <= row < self.table.rowCount() and row != self.table.currentRow():
@@ -369,6 +406,30 @@ class SequenceDialog(QDialog):
         row = self.table.currentRow()
         row = row + 1 if row >= 0 else len(self.steps)
         self.steps.insert(row, dict(kind='CMD'))
+        self.refresh(row)
+
+    def copy_row(self):
+        row = self.table.currentRow()
+        if row >= 0:
+            QApplication.clipboard().setText(json.dumps(
+                dict(format='pcan-sequence-row', step=self.steps[row]), ensure_ascii=False))
+
+    def paste_row(self):
+        try:
+            data = json.loads(QApplication.clipboard().text())
+            if not isinstance(data, dict) or data.get('format') != 'pcan-sequence-row':
+                return
+            step = data.get('step')
+            if not isinstance(step, dict) or step.get('kind') not in ('CMD', 'RCV', 'DEL', 'START', 'STOP'):
+                return
+        except (ValueError, TypeError):
+            return
+        if self.actions_only and step['kind'] == 'RCV':
+            QMessageBox.warning(self, 'Sequence', '이 설정에서는 RCV 단계를 사용할 수 없습니다.')
+            return
+        row = self.table.currentRow()
+        row = row + 1 if row >= 0 else len(self.steps)
+        self.steps.insert(row, copy.deepcopy(step))
         self.refresh(row)
 
     def delete(self):

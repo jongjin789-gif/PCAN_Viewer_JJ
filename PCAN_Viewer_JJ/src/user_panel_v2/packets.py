@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QAbstractItemView, QTableView, QHeaderView)
 from src.tx_panel import TxPacketDialog
 from src.tx_counter import counter_payload, latest_rx_payload
+from src.db_frame_format import compatible_signal_mapping
 from src.crc_utils import calculate_crc16_ccitt_false
 from .binding import pack_value, bit_positions
 from .commands import command_bindings
@@ -261,9 +262,40 @@ class RegisteredCommandDialog(QDialog):
         if self.combo.currentIndex() < 0:
             return
         packet = copy.deepcopy(self.packets[self.combo.currentIndex()])
+        previous = getattr(self, '_loaded_packet', None)
+        values = mask = None
+        manual = False
+        if previous and previous['id'] == packet['id'] and previous['bus'] != packet['bus'] and self.use_values.isChecked():
+            if previous['length'] != packet['length']:
+                self.combo.blockSignals(True)
+                self.combo.setCurrentIndex(self.combo.findData(previous['packet_id']))
+                self.combo.blockSignals(False)
+                QMessageBox.warning(self, 'CMD', '대상 패킷의 길이가 다릅니다. 기존 값 유지를 위해 같은 길이의 패킷을 선택하세요.')
+                return
+            try:
+                if self.direct_input.isChecked():
+                    values, mask = self.masked_input.values(previous['length'])
+                else:
+                    values = self.editor.get_packet_data()['data']
+                    mask = [255] * previous['length']
+            except ValueError as exc:
+                self.combo.blockSignals(True)
+                self.combo.setCurrentIndex(self.combo.findData(previous['packet_id']))
+                self.combo.blockSignals(False)
+                QMessageBox.warning(self, 'CMD', str(exc))
+                return
+            source = self.editor.current_db_msg
+            target = self.editor.db_messages.get(packet['bus'], {}).get(packet['id'])
+            manual = not compatible_signal_mapping(source, target)
+            packet['data'] = list(values)
+            if manual:
+                packet['dbc_manual'] = True
         packet.setdefault('count', 0)
         self.editor.set_packet_data(packet)
-        self.masked_input.set_data(packet['data'], [255] * packet['length'])
+        self._loaded_packet = copy.deepcopy(packet)
+        self.masked_input.set_data(packet['data'], mask if mask is not None else [255] * packet['length'])
+        if manual:
+            self.direct_input.setChecked(True)
         for widget in (self.editor.combo_bus, self.editor.edit_id, self.editor.combo_symbol,
                        self.editor.combo_type, self.editor.combo_length, self.editor.check_brs,
                        self.editor.crc_combo, self.editor.edit_cycle, self.editor.edit_note):
@@ -449,7 +481,9 @@ class PacketRegistryDialog(QDialog):
         actions = QHBoxLayout()
         for label, callback in [('패킷 등록', lambda: self.edit_packet(False)),
                                 ('선택 패킷 수정', lambda: self.edit_packet(True)),
-                                ('선택 패킷 삭제', self.remove_packet)]:
+                                ('선택 패킷 삭제', self.remove_packet),
+                                ('위로', lambda: self.move_packets(-1)),
+                                ('아래로', lambda: self.move_packets(1))]:
             button = QPushButton(label)
             if label == '선택 패킷 수정':
                 self.edit_button = button
@@ -476,6 +510,21 @@ class PacketRegistryDialog(QDialog):
         rows = self.list.selectedRows()
         if rows:
             self.panel._packet_clipboard = copy.deepcopy([self.packets[row] for row in rows])
+
+    def move_packets(self, direction):
+        selected = set(self.list.selectedRows())
+        if not selected:
+            return
+        rows = sorted(selected, reverse=direction > 0)
+        for row in rows:
+            target = row + direction
+            if 0 <= target < len(self.packets) and target not in selected:
+                self.packets[row], self.packets[target] = self.packets[target], self.packets[row]
+                selected.remove(row)
+                selected.add(target)
+        self.refresh()
+        self.list.selectRows(sorted(selected))
+        self.list.scrollTo(self.list.currentIndex())
 
     def paste_packet(self):
         clipboard = getattr(self.panel, '_packet_clipboard', None)

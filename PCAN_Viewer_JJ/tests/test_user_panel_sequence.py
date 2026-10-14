@@ -3,6 +3,7 @@ import json
 import os
 import time
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -22,6 +23,87 @@ def packet():
 
 
 class SequenceTest(unittest.TestCase):
+    def test_copied_receive_bus_change_keeps_mask_and_falls_back_to_direct_input(self):
+        source = Message(0x123, 'Example', 8, [Signal('A', 0, 8), Signal('B', 8, 8)])
+        match = Message(0x123, 'Example', 8, [Signal('A', 0, 8), Signal('B', 8, 8)])
+        mismatch = Message(0x123, 'Example', 8, [Signal('Different', 0, 8)])
+        step = dict(kind='RCV', packet=packet(), mask=[255] + [0] * 7, timeout_ms=300)
+        for target, direct in (({0x123: match}, False), ({}, True), ({0x123: mismatch}, True)):
+            with self.subTest(direct=direct, target=target):
+                editor = SequencePacketDialog({1: {0x123: source}, 2: target}, copy.deepcopy(step))
+                self.addCleanup(editor.close)
+                editor.combo_bus.setCurrentText('2')
+                editor.accept()
+                result = editor.result_step
+                self.assertEqual(result['packet']['bus'], 2)
+                self.assertEqual(result['packet']['data'], step['packet']['data'])
+                self.assertEqual(result['mask'], step['mask'])
+                self.assertEqual(result['timeout_ms'], 300)
+                self.assertEqual(result['direct_input'], direct)
+                if direct:
+                    self.assertEqual(result['packet']['symbol'], 'N/A')
+                    restored = SequencePacketDialog({2: target}, result)
+                    self.addCleanup(restored.close)
+                    self.assertIsNone(restored.current_db_msg)
+                    self.assertTrue(restored.direct_input.isChecked())
+
+    def test_row_shortcuts_copy_full_step_between_tool_and_init_editors(self):
+        step = dict(kind='CMD', packet=packet(), name='Command', repeat=3,
+                    data_override=[2] * 8, data_mask=[255] * 8)
+        editor = SequenceDialog({}, [step])
+        init = SequenceDialog({}, [], actions_only=True, allow_empty=True, allow_failure=False)
+        self.addCleanup(editor.close)
+        self.addCleanup(init.close)
+        old_clipboard = self.app.clipboard().text()
+        self.addCleanup(lambda: self.app.clipboard().setText(old_clipboard))
+        editor.show()
+        editor.activateWindow()
+        editor.table.setFocus()
+        self.app.processEvents()
+        QTest.keyClick(editor.table, Qt.Key_C, Qt.ControlModifier)
+        init.show()
+        init.activateWindow()
+        init.table.setFocus()
+        self.app.processEvents()
+        QTest.keyClick(init.table, Qt.Key_V, Qt.ControlModifier)
+        self.assertEqual(init.steps, [step])
+        button = init.table.cellWidget(0, 1)
+        button.setFocus()
+        QTest.keyClick(button, Qt.Key_V, Qt.ControlModifier)
+        self.assertEqual(init.steps, [step, step])
+        init.steps[1]['packet']['data'][0] = 99
+        self.assertEqual(init.steps[0]['packet']['data'][0], 1)
+        self.assertEqual(editor.steps[0]['packet']['data'][0], 1)
+
+    def test_sequence_text_editing_keeps_native_copy_and_paste(self):
+        editor = SequenceDialog({}, [dict(kind='DEL', delay_ms=10, name='First')])
+        self.addCleanup(editor.close)
+        old_clipboard = self.app.clipboard().text()
+        self.addCleanup(lambda: self.app.clipboard().setText(old_clipboard))
+        editor.show()
+        editor.activateWindow()
+        name = editor.table.cellWidget(0, 2)
+        name.setFocus()
+        name.selectAll()
+        self.app.processEvents()
+        QTest.keyClick(name, Qt.Key_C, Qt.ControlModifier)
+        self.assertEqual(self.app.clipboard().text(), 'First')
+        self.app.clipboard().setText('Renamed')
+        QTest.keyClick(name, Qt.Key_V, Qt.ControlModifier)
+        self.assertEqual(editor.steps[0]['name'], 'Renamed')
+        self.assertEqual(len(editor.steps), 1)
+
+    def test_init_paste_rejects_receive_steps(self):
+        old_clipboard = self.app.clipboard().text()
+        self.addCleanup(lambda: self.app.clipboard().setText(old_clipboard))
+        self.app.clipboard().setText(json.dumps(dict(format='pcan-sequence-row', step=dict(kind='RCV'))))
+        init = SequenceDialog({}, [], actions_only=True, allow_empty=True)
+        self.addCleanup(init.close)
+        with patch('src.user_panel_v2.sequence_dialog.QMessageBox.warning') as warning:
+            init.paste_row()
+        warning.assert_called_once()
+        self.assertEqual(init.steps, [])
+
     def test_sequence_cell_selection_remains_visible_when_deleting(self):
         steps = [dict(kind='DEL', delay_ms=10, name='First'),
                  dict(kind='DEL', delay_ms=20, name='Second')]

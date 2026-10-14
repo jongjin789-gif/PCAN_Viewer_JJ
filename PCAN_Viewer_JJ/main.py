@@ -3,15 +3,35 @@ import os
 import json
 import platform
 import ctypes
-from PyQt5.QtWidgets import QApplication
+from datetime import date, datetime
+from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
-from src.main_window import UniversalCANMonitor
 
 # User panel edit-mode password settings (modifiable by code)
 USER_PANEL_EDIT_PASSWORD_ENABLED = True
 USER_PANEL_EDIT_PASSWORD = "1234"
 USER_PANEL_COMMUNICATION_PASSWORD = "1234"
+# Last usable day (inclusive): YYYYMMDD integer encoded as 8 hex digits, without 0x.
+PROGRAM_EXPIRATION_DATE = "01354DA9"
+
+
+def check_program_expiration(today=None):
+    """Reject expired or malformed validity settings before opening any windows."""
+    try:
+        value = PROGRAM_EXPIRATION_DATE
+        if not isinstance(value, str) or len(value) != 8 or any(c not in '0123456789abcdefABCDEF' for c in value):
+            raise ValueError('Expected 8 hexadecimal digits')
+        date_text = str(int(value, 16))
+        if len(date_text) != 8:
+            raise ValueError('Decoded date must be YYYYMMDD')
+        expiration = datetime.strptime(date_text, '%Y%m%d').date()
+        usable = (today if today is not None else date.today()) <= expiration
+    except ValueError:
+        usable = False
+    if not usable:
+        QMessageBox.warning(None, 'Program Unavailable', 'This program can no longer be used.')
+    return usable
 
 def get_launch_options():
     """Read deployment flags beside the executable, independent of saved sessions."""
@@ -60,6 +80,9 @@ if __name__ == '__main__':
     ui_font.setStyleHint(QFont.Monospace)
     ui_font.setFixedPitch(True)
     app.setFont(ui_font)
+
+    if not check_program_expiration():
+        sys.exit(1)
     
     # Windows에서 절전 모드 진입으로 인한 성능 저하 방지
     if platform.system() == 'Windows':
@@ -76,6 +99,7 @@ if __name__ == '__main__':
 
     exit_code = 1
     try:
+        from src.main_window import UniversalCANMonitor
         options = get_launch_options()
         window = UniversalCANMonitor(
             viewer_only=options['viewer_mode_only'],

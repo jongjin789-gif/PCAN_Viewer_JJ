@@ -65,6 +65,8 @@ def validate_structure(data):
     ui = data.get('ui', {})
     if not isinstance(ui, dict) or type(ui.get('dbc_collapsed', False)) is not bool:
         raise ValueError('DBC 접기 설정이 올바르지 않습니다.')
+    if type(ui.get('can_collapsed', False)) is not bool:
+        raise ValueError('CAN 접기 설정이 올바르지 않습니다.')
     for key in ('graphs', 'tx_packets'):
         if not isinstance(data.get(key), list):
             raise ValueError(f'{key}: 목록이 필요합니다.')

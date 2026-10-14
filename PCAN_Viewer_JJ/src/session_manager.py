@@ -121,7 +121,7 @@ class SessionManager(QObject):
         return dict(format=FORMAT, version=2, databases=databases,
                     can={str(b): self.capture_can(b) for b in BUS_IDS},
                     tx_packets=packets, graphs=graphs, panel=panel_state,
-                    ui=dict(dbc_collapsed=m.db_group.is_collapsed()))
+                    ui=dict(dbc_collapsed=m.db_group.is_collapsed(), can_collapsed=m.conn_group.is_collapsed()))
 
     def autosave(self):
         if (not self.ready or not self.enabled or self.busy or self.main.viewer_only
@@ -329,6 +329,7 @@ class SessionManager(QObject):
                 m.bus_state_changed.emit(bus)
             m.search_input.clear()
             m.db_group.set_collapsed(False)
+            m.conn_group.set_collapsed(False)
             m.btn_open_log.setEnabled(False)
             m.btn_record.setEnabled(False)
             if hasattr(m.tx_panel, '_packet_clipboard'):
@@ -438,6 +439,7 @@ class SessionManager(QObject):
         self.clear_live()
         m.bus_issues.clear()
         m.db_group.set_collapsed(data.get('ui', {}).get('dbc_collapsed', False))
+        m.conn_group.set_collapsed(data.get('ui', {}).get('can_collapsed', False))
         m.search_can_channels()
         self.pending_can.clear()
         for bus in BUS_IDS:

@@ -26,7 +26,8 @@ from src.main_menu import install_main_menu
 from src.connection_controls import ConnectionGrid, CollapsibleGroup, BusLogDialog
 from src.bus_config import normalized_signature, bitrate_value
 from src.session_manager import device_identity
-from src.button_icons import decorate_button
+from src.button_icons import decorate_button, button_icon
+from src.main_theme import apply_main_theme, packet_section
 
 
 def _signal_display_decimals(signal):
@@ -299,11 +300,13 @@ class UniversalCANMonitor(QMainWindow):
         # ---------------------------------------------------------
         # 1. 상단 컨트롤 패널 (PCAN 채널 선택 및 연결)
         # ---------------------------------------------------------
-        conn_group = QGroupBox("Connection Control")
-        conn_layout = QVBoxLayout(conn_group)
-        conn_layout.setContentsMargins(0, 0, 0, 2)
+        conn_group = self.conn_group = CollapsibleGroup('CAN Settings',
+            icon=QIcon(get_resource_path('icon/panel/connection.svg')))
+        conn_group.collapsed_changed.connect(lambda collapsed: self.session.autosave() if hasattr(self, 'session') else None)
+        conn_layout = QVBoxLayout(conn_group.content)
+        conn_layout.setContentsMargins(0, 0, 0, 0)
         conn_layout.setSpacing(0)
-        self.connection_grid = ConnectionGrid(self, conn_group)
+        self.connection_grid = ConnectionGrid(self, conn_group.content)
         for key in ('channels', 'bitrate', 'fd_iso', 'data_bitrate'):
             setattr(self, 'combo_' + key, {b: self.connection_grid.fields[b, key] for b in BUS_IDS})
         self.btn_refresh = {b: self.connection_grid.buttons[b, 'refresh'] for b in BUS_IDS}
@@ -321,7 +324,7 @@ class UniversalCANMonitor(QMainWindow):
         # ---------------------------------------------------------
         # 2. 데이터베이스 파일 로드 패널
         # ---------------------------------------------------------
-        db_group = self.db_group = CollapsibleGroup("Database Files (.dbc, .sym)")
+        db_group = self.db_group = CollapsibleGroup("Database Files (.dbc, .sym)", icon=button_icon('database_load'))
         db_group.collapsed_changed.connect(lambda collapsed: self.session.autosave() if hasattr(self, "session") else None)
         db_layout = QVBoxLayout(db_group.content)
         db_layout.setContentsMargins(0, 0, 0, 0)
@@ -380,7 +383,7 @@ class UniversalCANMonitor(QMainWindow):
         self.btn_view_graph.clicked.connect(self.open_combined_graph)
         btn_layout.addWidget(self.btn_view_graph)
         
-        self.btn_uncheck_all = QPushButton("Uncheck")
+        self.btn_uncheck_all = QPushButton("Uncheck All")
         decorate_button(self.btn_uncheck_all, 'uncheck', '수신 신호의 체크를 모두 해제합니다.')
         self.btn_uncheck_all.clicked.connect(self.uncheck_all_signals)
         btn_layout.addWidget(self.btn_uncheck_all)
@@ -406,7 +409,7 @@ class UniversalCANMonitor(QMainWindow):
         tree_layout.addLayout(btn_layout)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(['Bus', 'Type', 'CAN ID (HEX)', 'Message / Signal', 'Direction', 'Value', 'Unit', 'Cycle (ms)', 'Count'])
+        self.tree.setHeaderLabels(['Bus', 'Type', 'CAN ID', 'Message / Signal', 'Dir.', 'Value', 'Unit', 'Cycle (ms)', 'Count'])
         self.tree.setColumnWidth(0, 40)  # Bus
         self.tree.setColumnWidth(1, 50)  # Type
         self.tree.setColumnWidth(2, 90)  # CAN ID
@@ -429,11 +432,11 @@ class UniversalCANMonitor(QMainWindow):
         self.btn_user_panel = QPushButton("User Panel")
         decorate_button(self.btn_user_panel, 'panel', '사용자 패널을 엽니다.', 'Panel')
         self.btn_user_panel.clicked.connect(self.open_user_panel)
-        self.tx_panel.insert_toolbar_widget_before_clear(self.btn_user_panel)
+        self.tx_panel.toolbar.addWidget(self.btn_user_panel)
         
         split_view = QSplitter(Qt.Vertical)
-        split_view.addWidget(tree_group)
-        split_view.addWidget(self.tx_panel)
+        split_view.addWidget(packet_section(tree_group, 'RX'))
+        split_view.addWidget(packet_section(self.tx_panel, 'TX'))
         split_view.setSizes([400, 200]) # 상단 수신부와 하단 송신부의 초기 비율
         main_layout.addWidget(split_view, 1)  # stretch 인자를 1로 주어 가능한 많은 공간 할당
         split_view.setVisible(not self.viewer_only)
@@ -447,6 +450,7 @@ class UniversalCANMonitor(QMainWindow):
         
         # 상태바 초기화
         self.statusBar().showMessage("Ready")
+        apply_main_theme(self)
         
     def on_tree_item_changed(self, item, column):
         """트리 아이템의 체크 상태가 변경될 때 호출됩니다."""
@@ -935,6 +939,12 @@ class UniversalCANMonitor(QMainWindow):
             combo = self.combo_channels[bus]
             index = next((i for i in range(combo.count())
                           if desired is not None and device_identity(combo.itemData(i)) == desired), -1)
+            if desired is None:
+                index = next((i for i in range(combo.count())
+                              if device_identity(combo.itemData(i)) is not None), -1)
+            if desired is None:
+                index = next((i for i in range(combo.count())
+                              if device_identity(combo.itemData(i)) is not None), -1)
             if combo.isEnabled():
                 combo.setCurrentIndex(index)
             if index >= 0:

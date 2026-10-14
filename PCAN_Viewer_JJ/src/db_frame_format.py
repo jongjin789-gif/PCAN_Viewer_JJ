@@ -3,6 +3,20 @@ import re
 import cantools
 
 
+def compatible_signal_mapping(source, target, signal_names=None):
+    """Allow a bus-only change when the saved signal interpretation still fits."""
+    if source is None or target is None or source.frame_id != target.frame_id or source.length != target.length:
+        return False
+    names = set(signal_names) if signal_names is not None else {s.name for s in source.signals}
+    fields = ('start', 'length', 'byte_order', 'is_signed', 'scale', 'offset',
+              'is_multiplexer', 'multiplexer_ids', 'multiplexer_signal')
+    old = {s.name: s for s in source.signals}
+    new = {s.name: s for s in target.signals}
+    return all(name in old and name in new and
+               all(getattr(old[name], key, None) == getattr(new[name], key, None) for key in fields)
+               for name in names)
+
+
 def is_fd_format(value):
     normalized = re.sub(r'[^a-z0-9]', '', str(value).lower())
     return normalized in {'fd', 'fdstandard', 'fdextended', 'fdcan', 'canfd',

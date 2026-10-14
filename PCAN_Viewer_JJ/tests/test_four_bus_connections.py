@@ -147,7 +147,7 @@ class FourBusConnectionsTest(unittest.TestCase):
         self.connect()
         self.assertFalse(tx.is_running)
 
-    def test_refresh_skips_connected_bus_and_preserves_unassigned_bus(self):
+    def test_refresh_skips_connected_bus_and_selects_first_for_empty_bus(self):
         device, _ = self.connect(1)
         source = self.main.combo_channels[1]
         original = [(source.itemText(i), source.itemData(i)) for i in range(source.count())]
@@ -162,7 +162,34 @@ class FourBusConnectionsTest(unittest.TestCase):
             self.assertEqual([(source.itemText(i), source.itemData(i)) for i in range(source.count())], original)
             self.main.search_can_channels()
         self.assertIs(self.main.buses[1], device)
-        self.assertEqual(self.main.combo_channels[4].currentIndex(), -1)
+        self.assertEqual(self.main.combo_channels[4].currentIndex(), 0)
+
+    def test_refresh_preserves_selected_device_and_does_not_replace_missing_device(self):
+        self.main.search_can_channels = UniversalCANMonitor.search_can_channels.__get__(self.main)
+        combo = self.main.combo_channels[4]
+        first = dict(bustype='virtual', handle='first', is_fd=False)
+        selected = dict(bustype='virtual', handle='selected', is_fd=False)
+        combo.addItem('selected', selected)
+        combo.setCurrentIndex(combo.count() - 1)
+
+        def discover(bus):
+            combo.clear()
+            combo.addItem('first', first)
+            combo.addItem('selected', selected)
+
+        with patch('src.main_window.platform.system', return_value='Windows'), \
+                patch.object(self.main, 'search_windows_can_channels', side_effect=discover):
+            self.main.search_can_channels(4)
+        self.assertEqual(combo.currentData(), selected)
+
+        def discover_missing(bus):
+            combo.clear()
+            combo.addItem('first', first)
+
+        with patch('src.main_window.platform.system', return_value='Windows'), \
+                patch.object(self.main, 'search_windows_can_channels', side_effect=discover_missing):
+            self.main.search_can_channels(4)
+        self.assertEqual(combo.currentIndex(), -1)
 
     def test_bus_four_dbc_signal_children_and_packet_roundtrip(self):
         self.install_db(1, ['One'])
@@ -218,11 +245,18 @@ class FourBusConnectionsTest(unittest.TestCase):
     def test_dbc_collapsed_state_roundtrip_preserves_hidden_databases(self):
         raw = self.install_db(4, ['A'])
         self.main.db_group.set_collapsed(True)
+        self.main.conn_group.header.click()
+        self.assertTrue(self.main.conn_group.is_collapsed())
+        self.assertTrue(self.main.conn_group.content.isHidden())
+        self.assertFalse(self.main.conn_group.header.icon().isNull())
+        self.assertFalse(self.main.db_group.header.icon().isNull())
         path = Path(self.temp.name) / 'collapsed.pjjsettings'
         write_session(path, self.main.session.capture())
         self.main.db_group.set_collapsed(False)
+        self.main.conn_group.set_collapsed(False)
         self.assertTrue(self.main.session.load(path))
         self.assertTrue(self.main.db_group.is_collapsed())
+        self.assertTrue(self.main.conn_group.is_collapsed())
         self.assertEqual(bytes(self.main.list_db_files[4].item(0).data(Qt.UserRole + 2)), raw)
         self.main.open_user_panel()
         dialog = ConnectionDialog(self.main.user_panel_window)

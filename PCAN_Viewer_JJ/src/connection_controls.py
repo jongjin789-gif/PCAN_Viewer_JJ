@@ -1,6 +1,6 @@
 """Four fixed CAN rows, shared state, and on-demand diagnostic history."""
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QPalette
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize, QPoint
+from PyQt5.QtGui import QPalette, QIcon, QPixmap, QPainter, QColor, QPolygon
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
     QHeaderView, QAbstractItemView, QComboBox, QPushButton, QLabel, QStyle,
     QDialog, QPlainTextEdit, QApplication, QFileDialog, QGroupBox, QToolButton,
@@ -42,8 +42,9 @@ class RateComboBox(CenteredComboBox):
 class CollapsibleGroup(QGroupBox):
     collapsed_changed = pyqtSignal(bool)
 
-    def __init__(self, title, parent=None):
+    def __init__(self, title, parent=None, icon=None):
         super().__init__(parent)
+        self._section_icon = icon
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 3, 6, 3)
         root.setSpacing(3)
@@ -65,7 +66,22 @@ class CollapsibleGroup(QGroupBox):
         self._toggle(True)
 
     def _toggle(self, expanded):
-        self.header.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        if self._section_icon is None:
+            self.header.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        else:
+            pixmap = QPixmap(32, 16)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor('#145b73'))
+            points = ((3, 6), (11, 6), (7, 10)) if expanded else ((5, 4), (9, 8), (5, 12))
+            painter.drawPolygon(QPolygon([QPoint(x, y) for x, y in points]))
+            painter.drawPixmap(16, 0, self._section_icon.pixmap(16, 16))
+            painter.end()
+            self.header.setIcon(QIcon(pixmap))
+            self.header.setIconSize(QSize(32, 16))
+        self.header.setToolTip('Collapse section' if expanded else 'Expand section')
         self.content.setVisible(expanded)
         self.collapsed_changed.emit(not expanded)
 

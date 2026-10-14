@@ -70,6 +70,31 @@ class PropertiesTest(unittest.TestCase):
         self.assertIsNone(d.combo_signal.currentData())
         self.assertEqual(d.spin_start_bit.value(), 32)
 
+    def test_bus_change_preserves_tool_binding_and_uses_matching_signal_only(self):
+        original = self.config(signal_name='Speed', scale=0.25, offset=-10)
+        source = self.database()[1]
+        changed = Message(0x123, 'Other', 8, [Signal('OtherSignal', 8, 12)])
+        for target, expected_signal in ((self.database()[1], 'Speed'), ({}, None),
+                                        ({0x123: changed}, None)):
+            with self.subTest(expected=expected_signal, target=target):
+                editor = WidgetConfigDialog({1: source, 2: target}, preset=copy.deepcopy(original))
+                self.addCleanup(editor.deleteLater)
+                before = editor.get_config()['binding']
+                editor.combo_bus.setCurrentText('2')
+                after = editor.get_config()['binding']
+                self.assertEqual(after['bus'], 2)
+                self.assertEqual(after['signal_name'], expected_signal)
+                for key in ('can_id', 'dlc', 'is_fd', 'brs', 'start_bit', 'bit_length',
+                            'byte_order', 'scale', 'offset', 'tx_press_value', 'tx_release_value'):
+                    self.assertEqual(after[key], before[key], key)
+                if expected_signal is None:
+                    self.assertEqual(editor.combo_message.currentText(), 'Manual Input')
+                    self.assertTrue(after['dbc_manual'])
+                    restored = WidgetConfigDialog({1: source, 2: target}, preset=editor.get_config())
+                    self.addCleanup(restored.deleteLater)
+                    self.assertIsNone(restored.combo_signal.currentData())
+
+
     def test_missing_changed_dbc_preserves_fields_and_values(self):
         cfg = self.config(signal_name="Speed", scale=0.25, offset=-10, tx_hold_period_ms=140)
         for db in ({}, self.database(start=16)):

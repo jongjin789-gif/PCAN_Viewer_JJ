@@ -829,6 +829,7 @@
     ]
   },
   "ui": {
-    "dbc_collapsed": false
+    "dbc_collapsed": false,
+    "can_collapsed": false
   }
 }

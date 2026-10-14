@@ -30,6 +30,54 @@ def tool(p, ident='tool', start=24, kind='slider'):
 
 
 class PanelPacketTest(unittest.TestCase):
+    def test_sequence_command_bus_change_keeps_override_and_uses_manual_for_missing_signals(self):
+        from src.user_panel_v2.packets import RegisteredCommandDialog
+        source = Message(0x123, 'Example', 8, [Signal('A', 0, 8)])
+        matching = Message(0x123, 'Example', 8, [Signal('A', 0, 8)])
+        other = Message(0x123, 'Other', 8, [Signal('Different', 0, 8)])
+        first, second = packet('first'), packet('second')
+        second['bus'] = 2
+        for target, manual in (({0x123: matching}, False), ({}, True), ({0x123: other}, True)):
+            with self.subTest(manual=manual, target=target):
+                step = dict(kind='CMD', packet=copy.deepcopy(first), data_override=[3] * 8, repeat=2)
+                dialog = RegisteredCommandDialog([first, second], step, db_messages={1: {0x123: source}, 2: target})
+                self.addCleanup(dialog.close)
+                dialog.combo.setCurrentIndex(1)
+                dialog.accept()
+                self.assertEqual(dialog.result_step['packet']['bus'], 2)
+                self.assertEqual(dialog.result_step['data_override'], [3] * 8)
+                self.assertEqual(dialog.result_step['repeat'], 2)
+                self.assertEqual(dialog.direct_input.isChecked(), manual)
+                if manual:
+                    self.assertIsNone(dialog.editor.current_db_msg)
+
+    def test_registry_move_buttons_preserve_multi_selection_and_picker_order(self):
+        from PyQt5.QtWidgets import QPushButton
+        from src.user_panel_v2.sequence_dialog import PacketActionDialog
+        panel = self.panel([packet(str(i), 0x120 + i) for i in range(5)])
+        registry = PacketRegistryDialog(panel)
+        self.addCleanup(registry.close)
+        registry.list.selectRows([1, 2])
+        up = next(b for b in registry.findChildren(QPushButton) if b.text() == '위로')
+        down = next(b for b in registry.findChildren(QPushButton) if b.text() == '아래로')
+        up.click()
+        self.assertEqual([p['packet_id'] for p in registry.packets], ['1', '2', '0', '3', '4'])
+        self.assertEqual(registry.list.selectedRows(), [0, 1])
+        up.click()
+        self.assertEqual([p['packet_id'] for p in registry.packets], ['1', '2', '0', '3', '4'])
+        down.click()
+        self.assertEqual([p['packet_id'] for p in registry.packets], ['0', '1', '2', '3', '4'])
+        registry.list.selectRows([2, 4])
+        up.click()
+        self.assertEqual([p['packet_id'] for p in registry.packets], ['0', '2', '1', '4', '3'])
+        self.assertEqual(registry.list.selectedRows(), [1, 3])
+        self.assertEqual([p['packet_id'] for p in panel.tx_packets], ['0', '1', '2', '3', '4'])
+        panel.tx_packets = copy.deepcopy(registry.packets)
+        self.assertEqual([p['packet_id'] for p in panel._panel_data()['tx_packets']], ['0', '2', '1', '4', '3'])
+        picker = PacketActionDialog(panel.tx_packets, dict(kind='START'))
+        self.addCleanup(picker.close)
+        self.assertEqual([picker.target.itemData(i) for i in range(1, picker.target.count())], ['0', '2', '1', '4', '3'])
+
     def test_registry_ctrl_shift_drag_selection_and_multi_paste(self):
         panel = self.panel([packet(str(i), 0x120 + i) for i in range(5)])
         registry = PacketRegistryDialog(panel)
