@@ -22,6 +22,8 @@ def install_main_menu(main):
         return item
 
     files = bar.addMenu('파일')
+    action(files, '새 화면', main.session.new_screen)
+    files.addSeparator()
     if not main.viewer_only:
         action(files, '통합 설정 저장…', main.session.save_dialog, shortcut='Ctrl+Shift+S')
         action(files, '통합 설정 불러오기…', main.session.load_dialog, shortcut='Ctrl+Shift+O')
@@ -59,14 +61,6 @@ def install_main_menu(main):
         tx.addSeparator()
         action(tx, '전체 송신 정지', main.session.stop_all, shortcut='Ctrl+Shift+X')
         action(tx, '전체 패킷 삭제', main.tx_panel.btn_clear_all.click, main.tx_panel.btn_clear_all)
-        view = bar.addMenu('보기')
-        for label, button in (('선택 신호 실시간 그래프', main.btn_view_graph),
-                              ('User Panel', main.btn_user_panel), ('기록 창', main.btn_record),
-                              ('신호 선택 전체 해제', main.btn_uncheck_all),
-                              ('모니터링 데이터 Clear', main.btn_clear_data)):
-            action(view, label, button.click, button)
-        action(view, 'Sync 그래프 통합 보기', main.open_combined_view)
-        action(view, '유저 패널 제목 변경…', main.rename_user_panel)
 
     help_menu = bar.addMenu('도움말')
     for label, filename in (('사용 설명서', 'MANUAL.md'),

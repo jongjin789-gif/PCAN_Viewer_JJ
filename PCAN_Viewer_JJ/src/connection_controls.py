@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
     QDialog, QPlainTextEdit, QApplication, QFileDialog, QGroupBox, QToolButton,
     QStylePainter, QStyleOptionComboBox, QSizePolicy)
 from src.bus_config import BUS_IDS, bitrate_value
+from src.button_icons import button_icon
 
 
 class CenteredComboBox(QComboBox):
@@ -174,7 +175,7 @@ class ConnectionGrid(QTableWidget):
                 if mirror:
                     field.currentIndexChanged.connect(lambda index, b=bus, k=key: self.change(b, k, index))
             refresh = QPushButton()
-            refresh.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+            refresh.setIcon(button_icon('refresh'))
             refresh.setToolTip(f'BUS {bus}: Refresh / 장치 검색')
             refresh.setAccessibleName(f'BUS {bus} 장치 검색')
             refresh.clicked.connect(lambda checked=False, b=bus: self.perform(lambda: main.search_can_channels(b)))
@@ -254,7 +255,7 @@ class ConnectionGrid(QTableWidget):
                                 field.setItemData(index, Qt.AlignCenter, Qt.TextAlignmentRole)
                 button = self.buttons[bus, 'connect']
                 button.setText('Close' if connected else 'Open')
-                button.setIcon(self.style().standardIcon(QStyle.SP_MediaStop if connected else QStyle.SP_MediaPlay))
+                button.setIcon(button_icon('stop' if connected else 'start'))
                 button.setToolTip(f"BUS {bus}: {'연결 해제' if connected else '연결'}")
                 button.setEnabled(not busy and (connected or self.main.can_open(bus)))
                 self.buttons[bus, 'refresh'].setEnabled(not busy and not connected)

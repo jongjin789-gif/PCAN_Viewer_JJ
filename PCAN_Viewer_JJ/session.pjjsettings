@@ -103,52 +103,12 @@
       "is_open": false
     }
   },
-  "tx_packets": [
-    {
-      "bus": 1,
-      "id": 28,
-      "is_fd": true,
-      "is_brs": false,
-      "length": 24,
-      "data": [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      "cycle": 0,
-      "signal_counters": {},
-      "note": "",
-      "symbol": "EMB_STATUS_01C",
-      "count": 0,
-      "crc_type": "N/A"
-    }
-  ],
+  "tx_packets": [],
   "graphs": [],
   "panel": {
     "data": {
       "version": 5,
-      "title": "User Panel",
+      "title": "HL Mando - ECM Steer Ctlr",
       "dbc_signature": {
         "1": [
           ".sym:067dca604ae2031a888647d1838a8d5266c156770d65dbac356fe140e78464b1",
@@ -862,10 +822,10 @@
     },
     "visible": false,
     "geometry": [
-      3840,
-      23,
-      1920,
-      1009
+      4008,
+      115,
+      1322,
+      812
     ]
   },
   "ui": {

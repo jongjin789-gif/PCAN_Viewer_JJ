@@ -297,6 +297,55 @@ class SessionManager(QObject):
             atomic_write(target, ('\n'.join(record.log_lines) + '\n').encode('utf-8'))
             record.is_saved = True
 
+    def new_screen(self):
+        """Stop communication and replace the workspace with startup defaults."""
+        if self.busy:
+            return False
+        try:
+            self.preserve_record()
+        except Exception as exc:
+            self.report('새 화면 실패', '기록을 보존하지 못해 현재 화면을 유지했습니다.', [str(exc)])
+            return False
+        self.busy = True
+        self.errors = []
+        m = self.main
+        try:
+            self.clear_live()
+            m.log_viewers.clear()
+            self.pending_can.clear()
+            m.signal_display_decimals.clear()
+            m.bus_issues.clear()
+            m._pending_panel_events.clear()
+            for dialog in list(m._bus_log_windows.values()):
+                from PyQt5 import sip
+                if not sip.isdeleted(dialog):
+                    dialog.close()
+            m._bus_log_windows.clear()
+            for bus in BUS_IDS:
+                m.bus_events[bus].clear()
+                m.combo_channels[bus].setCurrentIndex(-1)
+                m.on_channel_changed(bus)
+                m.combo_fd_iso[bus].setCurrentIndex(0)
+                m.bus_state_changed.emit(bus)
+            m.search_input.clear()
+            m.db_group.set_collapsed(False)
+            m.btn_open_log.setEnabled(False)
+            m.btn_record.setEnabled(False)
+            if hasattr(m.tx_panel, '_packet_clipboard'):
+                m.tx_panel._packet_clipboard = None
+            self.enabled = True
+            self.last_digest = None
+            if getattr(m, 'user_panel_only', False):
+                m.open_user_panel()
+        finally:
+            self.busy = False
+            issues, self.errors = self.errors, None
+        self.autosave()
+        m.statusBar().showMessage('새 화면 · 통신 및 전체 설정 초기화 완료', 5000)
+        if issues:
+            self.report('새 화면', '화면을 초기화했습니다. 종료 중 발생한 항목을 확인하세요.', issues)
+        return True
+
     def clear_live(self):
         m = self.main
         self.stop_all()

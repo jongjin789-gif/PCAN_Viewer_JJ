@@ -1,3 +1,4 @@
+from src.button_icons import decorate_button
 from src.bus_config import BUS_IDS
 from src.error_dialog import show_error
 import os
@@ -973,6 +974,10 @@ class TxPanel(QWidget):
         self.btn_save = QPushButton("Save Tx List")
         self.btn_clear_all = QPushButton("Clear All Packets")
         
+        decorate_button(self.btn_add, 'packet_add', '송신 패킷을 만듭니다.', 'Add Packet')
+        decorate_button(self.btn_load, 'document_open', '송신 패킷 목록을 불러옵니다.', 'Load TX')
+        decorate_button(self.btn_save, 'save', '송신 패킷 목록을 저장합니다.', 'Save TX')
+        decorate_button(self.btn_clear_all, 'trash', '송신 패킷을 모두 삭제합니다.', 'TX Clear')
         self.btn_add.clicked.connect(self.on_add_packet)
         self.btn_load.clicked.connect(self.on_load_packets)
         self.btn_save.clicked.connect(self.on_save_packets)
@@ -1009,6 +1014,7 @@ class TxPanel(QWidget):
         )
         layout.addWidget(self.tree)
         self.tree.itemDoubleClicked.connect(self.on_item_double_clicked)
+        self.tree.setExpandsOnDoubleClick(False)
         
         # Delete 키 입력 시 삭제 이벤트 연결
         self.shortcut_delete = QShortcut(QKeySequence(Qt.Key_Delete), self.tree)
@@ -1304,12 +1310,15 @@ class TxPanel(QWidget):
 
         # 주기 전송이 실행 중일 때: 'Stop' 버튼, 주황색 배경
         if item.is_running:
-            btn.setText("Stop")
+            decorate_button(btn, 'stop', '이 패킷의 주기 송신을 정지합니다.', 'Stop')
             btn.setStyleSheet("background-color: #ffc107; color: black;") # 주황색 배경으로 '실행 중' 상태 표시
             return
 
         # 주기 전송이 중지 상태일 때: 'Start' 또는 'Send' 버튼
-        btn.setText("Send" if item.packet_data["cycle"] == 0 else "Start")
+        if item.packet_data['cycle'] == 0:
+            decorate_button(btn, 'start', '이 패킷을 한 번 송신합니다.', 'Send')
+        else:
+            decorate_button(btn, 'start', '이 패킷의 주기 송신을 시작합니다.', 'Start')
         
         bus_num = item.packet_data["bus"]
         is_connected = self.buses.get(bus_num) is not None
@@ -1319,6 +1328,7 @@ class TxPanel(QWidget):
         is_incompatible = item.packet_data.get('length', 0) > 8
         
         if not is_connected or (is_incompatible and not bus_is_fd):
+            btn.setToolTip('BUS 연결과 CAN FD 설정을 확인해야 송신할 수 있습니다.')
             btn.setStyleSheet("background-color: #dc3545; color: white;") # 빨간색 배경으로 '전송 불가' 상태 표시
         else:
             btn.setStyleSheet("") # 기본 스타일

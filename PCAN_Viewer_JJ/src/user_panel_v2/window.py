@@ -433,6 +433,43 @@ class UserPanelWindow(QWidget):
 
         self._sync_geom_editor_from_selection()
 
+    def new_screen(self):
+        if self.mode != 'edit':
+            self.set_mode('edit')
+            if self.mode != 'edit':
+                return
+        self._sim_timer.stop()
+        self._cancel_draw_mode(refresh=False)
+        self._load_panel_data(dict(grid=dict(rows=36, cols=36, cell_size=32)))
+        self._tool_clipboard.clear()
+        self._packet_clipboard = []
+        self._paste_offset = 0
+        self._paused_packets.clear()
+        self.latest_raw_by_msg.clear()
+        self.latest_value_by_signal.clear()
+        self._overlap_map.clear()
+        self._conflict_cursor.clear()
+        self._sim_phase = 0.0
+        self._init_running = False
+        self.init_control.cfg['binding'] = dict(sequence_steps=[])
+        self.init_control.log.clear()
+        self.init_control.hide()
+        self.system_log.clear()
+        self._reset_history()
+        self.log_system('새 패널 · 도구와 TX 패킷 초기화 완료')
+        session = getattr(self.main_window, 'session', None)
+        if session:
+            session.autosave()
+
+    def rename_panel(self):
+        title, accepted = QInputDialog.getText(self, 'Rename Panel', 'Window title:', text=self.windowTitle())
+        if accepted:
+            self.setWindowTitle(title.strip() or 'User Panel')
+            self.log_system(f'창 제목 변경: {self.windowTitle()}')
+            session = getattr(self.main_window, 'session', None)
+            if session:
+                session.autosave()
+
     def clear_panel(self, scope):
         if self.mode != 'edit' or scope not in ('packets', 'tools', 'all'):
             return
@@ -537,6 +574,13 @@ class UserPanelWindow(QWidget):
 
     def _setup_menu_actions(self):
         menu_file = self.menu_bar.addMenu("File")
+        self.act_new_panel = QAction('New Panel', self)
+        self.act_new_panel.triggered.connect(self.new_screen)
+        menu_file.addAction(self.act_new_panel)
+        self.act_rename_panel = QAction('Rename Panel…', self)
+        self.act_rename_panel.triggered.connect(self.rename_panel)
+        menu_file.addAction(self.act_rename_panel)
+        menu_file.addSeparator()
         menu_edit = self.menu_bar.addMenu("Edit")
         self.act_undo = QAction("Undo", self)
         self.act_redo = QAction("Redo", self)
@@ -565,8 +609,8 @@ class UserPanelWindow(QWidget):
         menu_file.addAction(self.act_save_pkg)
         menu_file.addAction(self.act_load_pkg)
 
-        menu_comm = self.menu_bar.addMenu("통신")
-        self.act_open_communication = QAction("통신 설정 / DBC…", self)
+        menu_comm = self.menu_bar.addMenu("Communication")
+        self.act_open_communication = QAction("CAN / DBC Settings…", self)
         self.act_open_communication.triggered.connect(self.open_communication)
         menu_comm.addAction(self.act_open_communication)
 

@@ -12,7 +12,7 @@ from src.PCANBasic import *
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGroupBox, QHBoxLayout, QLabel, 
                              QComboBox, QPushButton, QListWidget, QListWidgetItem, QShortcut, QLineEdit,
                              QTreeWidget, QSplitter, QMessageBox, QFileDialog, QTreeWidgetItemIterator, QInputDialog)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt5.QtGui import QFont, QIcon, QKeySequence
 from src.utils import get_resource_path, SortableTreeWidgetItem
 from src.can_threads import CANReceiverThread
@@ -26,6 +26,7 @@ from src.main_menu import install_main_menu
 from src.connection_controls import ConnectionGrid, CollapsibleGroup, BusLogDialog
 from src.bus_config import normalized_signature, bitrate_value
 from src.session_manager import device_identity
+from src.button_icons import decorate_button
 
 
 def _signal_display_decimals(signal):
@@ -334,6 +335,7 @@ class UniversalCANMonitor(QMainWindow):
         for i in BUS_IDS:
             col_layout = QVBoxLayout()
             self.btn_load_db[i] = QPushButton(f"Load DBC/SYM (Bus {i})")
+            decorate_button(self.btn_load_db[i], 'database_load', f'BUS {i}의 DBC/SYM 파일을 등록합니다.')
             self.btn_load_db[i].clicked.connect(lambda checked=False, b=i: self.load_database_file(b))
             col_layout.addWidget(self.btn_load_db[i])
             
@@ -353,10 +355,12 @@ class UniversalCANMonitor(QMainWindow):
         db_layout.addLayout(db_cols_layout)
         
         self.btn_clear_all_db = QPushButton("Clear All DB Files")
+        decorate_button(self.btn_clear_all_db, 'trash', '모든 BUS의 DBC/SYM 등록을 해제합니다.', 'DBC Clear')
         self.btn_clear_all_db.clicked.connect(self.clear_all_database_files)
         db_group.header_row.addWidget(self.btn_clear_all_db)
         
         self.btn_open_log = QPushButton("Open CAN Log Viewer")
+        decorate_button(self.btn_open_log, 'document_open', 'CAN 로그 파일을 열어 확인합니다.', 'Log View')
         self.btn_open_log.clicked.connect(self.open_log_viewer)
         self.btn_open_log.setEnabled(False)
         db_group.header_row.addWidget(self.btn_open_log)
@@ -371,11 +375,13 @@ class UniversalCANMonitor(QMainWindow):
         tree_layout.setContentsMargins(0, 0, 0, 0)
         
         btn_layout = QHBoxLayout()
-        self.btn_view_graph = QPushButton("View Real-time Graph for Selection")
+        self.btn_view_graph = QPushButton("Graph View")
+        decorate_button(self.btn_view_graph, 'graph', '선택한 신호의 실시간 그래프를 엽니다.')
         self.btn_view_graph.clicked.connect(self.open_combined_graph)
         btn_layout.addWidget(self.btn_view_graph)
         
-        self.btn_uncheck_all = QPushButton("Uncheck All")
+        self.btn_uncheck_all = QPushButton("Uncheck")
+        decorate_button(self.btn_uncheck_all, 'uncheck', '수신 신호의 체크를 모두 해제합니다.')
         self.btn_uncheck_all.clicked.connect(self.uncheck_all_signals)
         btn_layout.addWidget(self.btn_uncheck_all)
         
@@ -387,10 +393,12 @@ class UniversalCANMonitor(QMainWindow):
         btn_layout.addStretch()
         
         self.btn_clear_data = QPushButton("Clear Data")
+        decorate_button(self.btn_clear_data, 'view_clear', '수신 패킷 화면과 통계를 비웁니다.')
         self.btn_clear_data.clicked.connect(self.clear_monitoring_data)
         btn_layout.addWidget(self.btn_clear_data)
         
         self.btn_record = QPushButton("Record")
+        decorate_button(self.btn_record, 'record', 'CAN 로그 기록창을 엽니다.')
         self.btn_record.clicked.connect(self.open_record_window)
         self.btn_record.setEnabled(False)
         btn_layout.addWidget(self.btn_record)
@@ -419,6 +427,7 @@ class UniversalCANMonitor(QMainWindow):
         # ---------------------------------------------------------
         self.tx_panel = TxPanel(self.buses, self.db_messages, self)
         self.btn_user_panel = QPushButton("User Panel")
+        decorate_button(self.btn_user_panel, 'panel', '사용자 패널을 엽니다.', 'Panel')
         self.btn_user_panel.clicked.connect(self.open_user_panel)
         self.tx_panel.insert_toolbar_widget_before_clear(self.btn_user_panel)
         
@@ -786,18 +795,6 @@ class UniversalCANMonitor(QMainWindow):
         )
         bus_obj.send(msg)
         self.record_tx_activity(int(bus_num), int(can_id), payload, is_fd)
-
-    def rename_user_panel(self):
-        if self.viewer_only:
-            return
-        if not self.open_user_panel():
-            return
-        panel = self.user_panel_window
-        title, accepted = QInputDialog.getText(self, '유저 패널 제목 변경', '창 제목:', text=panel.windowTitle())
-        if accepted:
-            panel.setWindowTitle(title.strip() or 'User Panel')
-            panel.log_system(f'창 제목 변경: {panel.windowTitle()}')
-            self.session.autosave()
 
     def choose_panel_history(self):
         box = QMessageBox(self.user_panel_window if self.user_panel_window.isVisible() else self)
