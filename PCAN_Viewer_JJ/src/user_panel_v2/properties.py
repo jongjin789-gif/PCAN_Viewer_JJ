@@ -66,7 +66,7 @@ class ToolProperties(QWidget):
             self.editor = WidgetConfigDialog(
                 self.panel.db_messages, self.body, preset=cfg, embedded=True,
                 live_preview_default=False, grid_rows=self.panel.grid_rows,
-                grid_cols=self.panel.grid_cols,
+                grid_cols=self.panel.grid_cols, grid_cell_size=self.panel.grid_cell_size,
                 parent_candidates=self.panel._group_parent_candidates(exclude_id=cfg["id"]),
                 tx_packets=self.panel.tx_packets,
             )

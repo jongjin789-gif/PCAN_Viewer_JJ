@@ -27,6 +27,27 @@ from PyQt5.QtWidgets import (
 )
 
 
+def minimum_tool_spans(widget_type, cell_size, grid_rows, grid_cols):
+    if widget_type == "shape_line":
+        return 1, 1
+    if widget_type == "slider":
+        min_row_pixels, min_col_pixels = 64, 192
+        min_rows, min_cols = 3, 12
+    elif widget_type == "sequence":
+        min_row_pixels, min_col_pixels = 112, 192
+        min_rows, min_cols = 4, 6
+    elif widget_type == "spinbox":
+        min_row_pixels, min_col_pixels = 48, 96
+        min_rows, min_cols = 2, 4
+    else:
+        min_row_pixels, min_col_pixels = 48, 64
+        min_rows, min_cols = 2, 4
+    cell_size = max(1, int(cell_size))
+    row_span = min(grid_rows, max(min_rows, (min_row_pixels + cell_size - 1) // cell_size))
+    col_span = min(grid_cols, max(min_cols, (min_col_pixels + cell_size - 1) // cell_size))
+    return row_span, col_span
+
+
 class WidgetConfigDialog(QDialog):
     config_changed = pyqtSignal(dict)
 
@@ -43,6 +64,7 @@ class WidgetConfigDialog(QDialog):
         embedded=False,
         tx_packets=None,
         allow_multi=True,
+        grid_cell_size=16,
     ):
         super().__init__(parent)
         self.embedded = embedded
@@ -61,6 +83,7 @@ class WidgetConfigDialog(QDialog):
         self.live_preview_default = bool(live_preview_default)
         self.grid_rows = max(1, int(grid_rows))
         self.grid_cols = max(1, int(grid_cols))
+        self.grid_cell_size = max(1, int(grid_cell_size))
         self._config_id = str(uuid.uuid4())
         self._enum_entries = []
         self.sequence_steps = []
@@ -602,7 +625,8 @@ class WidgetConfigDialog(QDialog):
                           binding=copy.deepcopy(self.tx_commands[row]['binding']))
         dialog = WidgetConfigDialog(self.db_messages, self, preset=preset,
                                     fixed_behavior='tx', tx_packets=self.tx_packets,
-                                    live_preview_default=False, allow_multi=False)
+                                    live_preview_default=False, allow_multi=False,
+                                    grid_cell_size=self.grid_cell_size)
         dialog.setWindowTitle('추가 명령 설정')
         dialog.combo_widget_type.setEnabled(False)
         if preset['widget_type'] == 'slider':
@@ -712,16 +736,14 @@ class WidgetConfigDialog(QDialog):
 
         # 위젯이 너무 작아져 레이아웃이 깨지는 현상을 방지하기 위해 최소 크기를 제한합니다.
         # 단, 한 줄 짜리 선(shape_line)은 예외적으로 1의 크기를 가질 수 있습니다.
-        if wtype == "shape_line":
-            self.spin_row_span.setMinimum(1)
-            self.spin_col_span.setMinimum(1)
-        elif wtype == "slider":
-            self.spin_row_span.setMinimum(3)
-            self.spin_col_span.setMinimum(4)
-        else:
-            # 일반 위젯은 2행, 슬라이더는 내부 3행을 표시할 공간이 필요합니다.
-            self.spin_row_span.setMinimum(2)
-            self.spin_col_span.setMinimum(4)
+        min_row_span, min_col_span = minimum_tool_spans(
+            wtype, self.grid_cell_size, self.grid_rows, self.grid_cols
+        )
+        self.spin_row_span.setMinimum(min_row_span)
+        self.spin_row_span.setMaximum(
+            min_row_span if wtype == "slider" else self.grid_rows
+        )
+        self.spin_col_span.setMinimum(min_col_span)
 
         is_shape = wtype in ("shape_line", "shape_rect")
         is_group_container = wtype in ("group_box", "tab_container")

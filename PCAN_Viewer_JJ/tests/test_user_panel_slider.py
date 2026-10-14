@@ -64,9 +64,9 @@ class SliderTest(unittest.TestCase):
         dialog.deleteLater()
         restored.deleteLater()
 
-    def test_slider_tool_uses_three_grid_rows_and_keeps_controls_inside(self):
+    def test_slider_tool_adapts_grid_span_and_keeps_controls_inside(self):
         panel = UserPanelWindow(SimpleNamespace(), {})
-        panel._load_panel_data(dict(grid=dict(rows=8, cols=8, cell_size=32), widgets=[dict(
+        panel._load_panel_data(dict(grid=dict(rows=8, cols=20, cell_size=32), widgets=[dict(
             id="slider", title="ANGLE", widget_type="slider", behavior="tx",
             row=0, col=0, row_span=2, col_span=4,
             binding=dict(min=-65, max=65, tx_resolution=0.1, tx_initial_value=0))]))
@@ -74,17 +74,53 @@ class SliderTest(unittest.TestCase):
         panel.show()
         self.app.processEvents()
 
-        self.assertEqual(panel.widgets_config[0]["row_span"], 3)
+        self.assertEqual(panel.widgets_config[0]["row_span"], 4)
+        self.assertEqual(panel.widgets_config[0]["col_span"], 12)
         control = panel.widget_controls["slider"]
         home = control.findChild(QPushButton, "slider_home")
+        set_button = control.findChild(QPushButton, "slider_set")
+        value_input = control.findChild(QLineEdit, "slider_value_input")
         slider = control.findChild(QSlider, "slider")
         value = control.findChild(QLabel, "value_label")
+        title = control.findChild(QLabel, "slider_title")
+        title_top_left = title.mapTo(control, QPoint(0, 0))
+        home_top_left = home.mapTo(control, QPoint(0, 0))
         slider_top_left = slider.mapTo(control, QPoint(0, 0))
         value_top_left = value.mapTo(control, QPoint(0, 0))
+        self.assertEqual(home.width(), 3 * panel.grid_cell_size)
+        self.assertEqual(home.font().pixelSize(), 10)
         self.assertGreaterEqual(control.height(), home.sizeHint().height())
+        self.assertEqual(home.height(), 2 * panel.grid_cell_size)
+        self.assertLess(home.height(), control.height())
+        self.assertGreaterEqual(title.width(), 3 * panel.grid_cell_size)
+        self.assertEqual(title.toolTip(), "[TX] ANGLE")
+        self.assertEqual(title_top_left.x(), home_top_left.x())
+        self.assertGreater(home_top_left.y(), title_top_left.y())
+        self.assertEqual(
+            slider_top_left.x() - home.geometry().right() - 1,
+            max(1, panel.grid_cell_size // 2),
+        )
+        self.assertLess(value_input.geometry().right(), set_button.geometry().left())
         self.assertGreaterEqual(control.rect().bottom(), home.geometry().bottom())
         self.assertGreaterEqual(control.rect().bottom(), slider_top_left.y() + slider.height())
         self.assertGreaterEqual(control.rect().bottom(), value_top_left.y() + value.height())
+
+        home_width = home.width()
+        slider_width = slider.width()
+        control_height = control.height()
+        panel.selected_widget_id = "slider"
+        panel._sync_geom_editor_from_selection()
+        self.assertEqual(panel.spin_sel_row_span.minimum(), 4)
+        self.assertEqual(panel.spin_sel_row_span.maximum(), 4)
+        panel.resize_selected_span(0, 2)
+        self.assertEqual(panel.widgets_config[0]["row_span"], 4)
+        panel.widgets_config[0]["col_span"] += 4
+        panel.rebuild_grid()
+        wider_home = panel.widget_controls["slider"].findChild(QPushButton, "slider_home")
+        wider_slider = panel.widget_controls["slider"].findChild(QSlider, "slider")
+        self.assertEqual(wider_home.width(), home_width)
+        self.assertGreater(wider_slider.width(), slider_width)
+        self.assertEqual(panel.widget_controls["slider"].height(), control_height)
         panel.close()
 
     def test_tx_slider_displays_the_dbc_decoded_value(self):

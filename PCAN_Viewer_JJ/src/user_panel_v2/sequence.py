@@ -82,17 +82,20 @@ class SequenceControl(QWidget):
         self.watchdog = QTimer(self)
         self.watchdog.setInterval(100)
         self.watchdog.timeout.connect(self._check_connection)
+        force_button_width = max(1, int(getattr(owner, 'grid_cell_size', 32)))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(4)
         self.button = QPushButton()
+        button_font = self.button.font()
+        button_font.setPixelSize(max(8, min(10, force_button_width * 5 // 8)))
+        self.button.setFont(button_font)
         self.button.setIconSize(QSize(24, 24))
         self.button.clicked.connect(lambda: self.toggle())
         self.force_button = QToolButton()
         self.force_button.setIcon(QIcon(get_resource_path('icon/panel/force.svg')))
-        force_button_width = max(1, int(getattr(owner, 'grid_cell_size', 32)))
         force_icon_size = max(8, min(24, force_button_width - 8))
         self.force_button.setIconSize(QSize(force_icon_size, force_icon_size))
         self.force_button.setToolTip('강제 실행 (RCV 무시)')
@@ -135,14 +138,19 @@ class SequenceControl(QWidget):
         self._state("ready", "실행")
 
     def _state(self, state, label):
-        self.button.setText(f"{self.cfg.get('title', 'Sequence')} · {label}")
+        button_text = (
+            f"{self.cfg.get('title', 'Sequence')} · {label}"
+            if self.cfg.get('is_init')
+            else label
+        )
+        self.button.setText(button_text)
         active = state in ('run', 'receive', 'delay')
         icon_path = 'icon/graph_controls/stop.svg' if active else 'icon/panel/run.svg'
         self.button.setIcon(QIcon(get_resource_path(icon_path)))
         self.button.setToolTip('시퀀스 정지' if active else '시퀀스 실행 (RCV 응답 확인)')
         self.button.setAccessibleName(self.button.toolTip())
         color = "black" if state == "receive" else "white"
-        self.button.setStyleSheet(f"background:{self.COLORS[state]}; color:{color}; padding:4px;")
+        self.button.setStyleSheet(f"background:{self.COLORS[state]}; color:{color}; padding:1px;")
 
     def write(self, message, color="black"):
         if hasattr(self.owner, 'log_system'):

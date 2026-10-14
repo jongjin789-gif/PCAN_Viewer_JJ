@@ -8,9 +8,9 @@ QFrame[panelCard="true"][selected="true"] {
     border: 1px solid #2563eb; background: #f5f8ff;
 }
 QLabel { color: #334155; background: transparent; border: none; }
-QLabel[panelTitle="true"] { color: #64748b; font-size: 11px; font-weight: 600; }
+QLabel[panelTitle="true"] { color: #64748b; font-weight: 600; }
 QLabel#value_label, QLabel[panelValue="true"] {
-    color: #0f172a; font-size: 16px; font-weight: 600;
+    color: #0f172a; font-weight: 600;
 }
 QPushButton {
     color: #334155; background: #f1f5f9; border: 1px solid #cbd5e1;
@@ -38,7 +38,7 @@ QSlider::sub-page:horizontal:disabled { background: #cbd5e1; }
 QSlider::handle:horizontal:disabled { border-color: #94a3b8; }
 QDoubleSpinBox {
     color: #0f172a; background: #f8fafc; border: 1px solid #cbd5e1;
-    border-radius: 6px; padding: 2px 4px; font-size: 14px;
+    border-radius: 6px; padding: 2px 4px;
 }
 QDoubleSpinBox:disabled { color: #94a3b8; }
 QProgressBar {

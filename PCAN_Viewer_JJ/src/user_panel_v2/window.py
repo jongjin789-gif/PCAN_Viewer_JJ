@@ -9,8 +9,8 @@ import uuid
 import queue
 from contextlib import ExitStack
 from .periodic_sender import PeriodicSender
-from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QPoint, QSize
-from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QIcon
+from PyQt5.QtCore import Qt, QTimer, QRect, QEvent, pyqtSignal, QPoint, QSize
+from PyQt5.QtGui import QColor, QFontMetrics, QKeySequence, QPainter, QPen, QIcon
 from PyQt5.QtWidgets import (
     QAction,
     QAbstractItemView,
@@ -47,7 +47,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .config_dialog import WidgetConfigDialog
+from .config_dialog import WidgetConfigDialog, minimum_tool_spans
 from .sequence import SequenceControl, validate_steps
 from .mode_security import verify_edit_password, verify_communication_password
 from .system_log import SystemLog
@@ -61,19 +61,90 @@ from .commands import command_bindings
 from .packets import PacketRegistryDialog, PacketRuntime, find_packet, bind_packet, validate_tool, validate_packet, connected_packet_bus
 
 
+class FittingLabel(QLabel):
+    def __init__(self, text="", parent=None, base_pixel_size=11, min_pixel_size=8):
+        self._full_text = str(text)
+        self._base_pixel_size = base_pixel_size
+        self._min_pixel_size = min_pixel_size
+        super().__init__(parent)
+        font = self.font()
+        font.setPixelSize(base_pixel_size)
+        self.setFont(font)
+        self._fit_text()
+
+    def setText(self, text):
+        self._full_text = str(text)
+        self._fit_text()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_text()
+
+    def _fit_text(self):
+        available_width = max(1, self.contentsRect().width())
+        font = self.font()
+        for pixel_size in range(self._base_pixel_size, self._min_pixel_size - 1, -1):
+            font.setPixelSize(pixel_size)
+            if QFontMetrics(font).horizontalAdvance(self._full_text) <= available_width:
+                break
+
+        metrics = QFontMetrics(font)
+        display_text = metrics.elidedText(self._full_text, Qt.ElideRight, available_width)
+        self.setFont(font)
+        QLabel.setText(self, display_text)
+        self.setToolTip(
+            self._full_text
+            if display_text != self._full_text or font.pixelSize() < self._base_pixel_size
+            else ""
+        )
+
+
+class FittingGroupBox(QGroupBox):
+    def __init__(self, title, parent=None):
+        self._full_title = str(title)
+        super().__init__(self._full_title, parent)
+        font = self.font()
+        font.setPixelSize(11)
+        self.setFont(font)
+        self._fit_title()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_title()
+
+    def _fit_title(self):
+        available_width = max(1, self.width() - 24)
+        font = self.font()
+        for pixel_size in range(11, 7, -1):
+            font.setPixelSize(pixel_size)
+            if QFontMetrics(font).horizontalAdvance(self._full_title) <= available_width:
+                break
+
+        display_title = QFontMetrics(font).elidedText(
+            self._full_title, Qt.ElideRight, available_width
+        )
+        self.setFont(font)
+        self.setTitle(display_title)
+        self.setToolTip(
+            self._full_title
+            if display_title != self._full_title or font.pixelSize() < 11
+            else ""
+        )
+
+
 class GridCanvas(QWidget):
     def __init__(self, owner, parent=None):
         super().__init__(parent)
         self.owner = owner
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        rows = max(1, int(getattr(self.owner, "grid_rows", 12)))
-        cols = max(1, int(getattr(self.owner, "grid_cols", 12)))
+        cell_size = max(1, int(getattr(self.owner, "grid_cell_size", 16)))
         w = max(1, self.width())
         h = max(1, self.height())
-        cell_w = w / float(cols)
-        cell_h = h / float(rows)
+        rows = max(1, int(getattr(self.owner, "grid_rows", 12)))
+        cols = max(1, int(getattr(self.owner, "grid_cols", 12)))
 
         p = QPainter(self)
         c0 = QColor("#F8FAFC")
@@ -81,18 +152,20 @@ class GridCanvas(QWidget):
 
         for r in range(rows):
             for c in range(cols):
-                x = int(round(c * cell_w))
-                y = int(round(r * cell_h))
-                x2 = int(round((c + 1) * cell_w))
-                y2 = int(round((r + 1) * cell_h))
-                p.fillRect(x, y, max(1, x2 - x), max(1, y2 - y), c0 if ((r + c) % 2 == 0) else c1)
+                p.fillRect(
+                    c * cell_size,
+                    r * cell_size,
+                    cell_size,
+                    cell_size,
+                    c0 if ((r + c) % 2 == 0) else c1,
+                )
 
         p.setPen(QPen(QColor("#E5EAF1"), 1))
         for r in range(rows + 1):
-            y = int(round(r * cell_h))
+            y = r * cell_size
             p.drawLine(0, y, w, y)
         for c in range(cols + 1):
-            x = int(round(c * cell_w))
+            x = c * cell_size
             p.drawLine(x, 0, x, h)
 
         p.end()
@@ -115,7 +188,7 @@ class UserPanelWindow(QWidget):
 
         self.grid_rows = 36
         self.grid_cols = 36
-        self.grid_cell_size = 32
+        self.grid_cell_size = 16
         self.mode = "edit"
 
         self.widgets_config = []
@@ -164,6 +237,7 @@ class UserPanelWindow(QWidget):
         self._drag_origin_parent = None
         self._drag_resize_mode = False
         self._drag_preview_band = None
+        self._grid_resize_pending = False
         self._prop_syncing = False
         self._overlap_map = {}
         self._conflict_cursor = {}
@@ -373,6 +447,7 @@ class UserPanelWindow(QWidget):
         self.canvas_scroll.setWidgetResizable(True)
         self.canvas_scroll.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.canvas_scroll.setWidget(self.canvas)
+        self.canvas_scroll.viewport().installEventFilter(self)
         page_row = QHBoxLayout()
         self.page_tabs = QTabBar()
         self.page_tabs.setExpanding(False)
@@ -440,7 +515,7 @@ class UserPanelWindow(QWidget):
                 return
         self._sim_timer.stop()
         self._cancel_draw_mode(refresh=False)
-        self._load_panel_data(dict(grid=dict(rows=36, cols=36, cell_size=32)))
+        self._load_panel_data(dict(grid=dict(rows=36, cols=36, cell_size=16)))
         self._tool_clipboard.clear()
         self._packet_clipboard = []
         self._paste_offset = 0
@@ -1202,8 +1277,8 @@ class UserPanelWindow(QWidget):
 
         x = max(0, min(self.canvas.width() - 1, int(pos.x())))
         y = max(0, min(self.canvas.height() - 1, int(pos.y())))
-        col = self._cell_index_from_coord(x, self.canvas.width(), self.grid_cols)
-        row = self._cell_index_from_coord(y, self.canvas.height(), self.grid_rows)
+        col = min(self.grid_cols - 1, x // self.grid_cell_size)
+        row = min(self.grid_rows - 1, y // self.grid_cell_size)
         return row, col
 
     def _cell_index_from_coord(self, coord, size, count):
@@ -1291,6 +1366,7 @@ class UserPanelWindow(QWidget):
             live_preview_default=False,
             grid_rows=self.grid_rows,
             grid_cols=self.grid_cols,
+            grid_cell_size=self.grid_cell_size,
             tx_packets=self.tx_packets,
         )
         if behavior == "tx":
@@ -1402,6 +1478,16 @@ class UserPanelWindow(QWidget):
         self.selected_widget_ids = ids
         return [c for c in self.widgets_config if c["id"] in ids]
 
+    def _minimum_tool_row_span(self, widget_type):
+        return minimum_tool_spans(
+            widget_type, self.grid_cell_size, self.grid_rows, self.grid_cols
+        )[0]
+
+    def _minimum_tool_col_span(self, widget_type):
+        return minimum_tool_spans(
+            widget_type, self.grid_cell_size, self.grid_rows, self.grid_cols
+        )[1]
+
     def _normalize_config(self, cfg):
         existing = self._cfg_by_id(cfg.get('id'))
         cfg.setdefault('page_id', existing.get('page_id', self.active_page_id) if existing else self.active_page_id)
@@ -1458,12 +1544,15 @@ class UserPanelWindow(QWidget):
             cfg["parent_id"] = None
 
         wtype = cfg.get("widget_type", "label")
-        min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
-        min_col_span = 1 if wtype == "shape_line" else 4
+        min_row_span = self._minimum_tool_row_span(wtype)
+        min_col_span = self._minimum_tool_col_span(wtype)
 
         cfg["row"] = max(0, min(self.grid_rows - 1, int(cfg.get("row", 0))))
         cfg["col"] = max(0, min(self.grid_cols - 1, int(cfg.get("col", 0))))
-        cfg["row_span"] = max(min_row_span, min(self.grid_rows, int(cfg.get("row_span", 1))))
+        cfg["row_span"] = (
+            min_row_span if wtype == "slider"
+            else max(min_row_span, min(self.grid_rows, int(cfg.get("row_span", 1))))
+        )
         cfg["col_span"] = max(min_col_span, min(self.grid_cols, int(cfg.get("col_span", 1))))
 
     def _group_parent_candidates(self, exclude_id=None):
@@ -1568,8 +1657,8 @@ class UserPanelWindow(QWidget):
         local = self.canvas.mapFromGlobal(global_pos)
         x = max(0, min(max(0, self.canvas.width() - 1), int(local.x())))
         y = max(0, min(max(0, self.canvas.height() - 1), int(local.y())))
-        col = self._cell_index_from_coord(x, self.canvas.width(), self.grid_cols)
-        row = self._cell_index_from_coord(y, self.canvas.height(), self.grid_rows)
+        col = min(self.grid_cols - 1, x // self.grid_cell_size)
+        row = min(self.grid_rows - 1, y // self.grid_cell_size)
         return row, col
 
     def _on_tool_list_selection_changed(self, *_args):
@@ -1624,20 +1713,25 @@ class UserPanelWindow(QWidget):
 
             if not cfg:
                 # 선택된 위젯이 없을 경우: 기본 최소값으로 범위를 설정하고 값을 초기화합니다.
-                self.spin_sel_row_span.setRange(2, self.grid_rows)
-                self.spin_sel_col_span.setRange(4, self.grid_cols)
+                min_row_span = self._minimum_tool_row_span("button")
+                min_col_span = self._minimum_tool_col_span("button")
+                self.spin_sel_row_span.setRange(min_row_span, self.grid_rows)
+                self.spin_sel_col_span.setRange(min_col_span, self.grid_cols)
                 self.spin_sel_row.setValue(0)
                 self.spin_sel_col.setValue(0)
-                self.spin_sel_row_span.setValue(2)
-                self.spin_sel_col_span.setValue(4)
+                self.spin_sel_row_span.setValue(min_row_span)
+                self.spin_sel_col_span.setValue(min_col_span)
                 return
 
             # 선택된 위젯이 있을 경우: 위젯 타입에 맞는 최소 크기 제약을 적용합니다.
             wtype = cfg.get("widget_type")
-            min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
-            min_col_span = 1 if wtype == "shape_line" else 4
+            min_row_span = self._minimum_tool_row_span(wtype)
+            min_col_span = self._minimum_tool_col_span(wtype)
 
-            self.spin_sel_row_span.setRange(min_row_span, self.grid_rows)
+            self.spin_sel_row_span.setRange(
+                min_row_span,
+                min_row_span if wtype == "slider" else self.grid_rows,
+            )
             self.spin_sel_col_span.setRange(min_col_span, self.grid_cols)
 
             self.spin_sel_row.setValue(max(0, min(self.grid_rows - 1, int(cfg.get("row", 0)))))
@@ -1683,17 +1777,45 @@ class UserPanelWindow(QWidget):
             self.focus_next_conflict()
 
     def _sync_canvas_size(self):
-        self.canvas.setMinimumSize(
+        self.canvas.setFixedSize(
             self.grid_cols * self.grid_cell_size,
             self.grid_rows * self.grid_cell_size,
         )
         # Clear obsolete tracks when loading a panel with fewer rows/columns.
         for r in range(max(self.grid_rows, self.canvas_layout.rowCount())):
-            self.canvas_layout.setRowStretch(r, 1 if r < self.grid_rows else 0)
+            self.canvas_layout.setRowStretch(r, 0)
             self.canvas_layout.setRowMinimumHeight(r, self.grid_cell_size if r < self.grid_rows else 0)
         for c in range(max(self.grid_cols, self.canvas_layout.columnCount())):
-            self.canvas_layout.setColumnStretch(c, 1 if c < self.grid_cols else 0)
+            self.canvas_layout.setColumnStretch(c, 0)
             self.canvas_layout.setColumnMinimumWidth(c, self.grid_cell_size if c < self.grid_cols else 0)
+        self.canvas.update()
+
+    def eventFilter(self, watched, event):
+        if (
+            hasattr(self, "canvas_scroll")
+            and watched is self.canvas_scroll.viewport()
+            and event.type() == QEvent.Resize
+            and not self._grid_resize_pending
+        ):
+            self._grid_resize_pending = True
+            QTimer.singleShot(0, self._expand_grid_to_viewport)
+        return super().eventFilter(watched, event)
+
+    def _expand_grid_to_viewport(self):
+        self._grid_resize_pending = False
+        viewport = self.canvas_scroll.viewport()
+        required_cols = max(1, math.ceil(viewport.width() / self.grid_cell_size))
+        required_rows = max(1, math.ceil(viewport.height() / self.grid_cell_size))
+        new_cols = max(self.grid_cols, required_cols)
+        new_rows = max(self.grid_rows, required_rows)
+        if (new_rows, new_cols) == (self.grid_rows, self.grid_cols):
+            return
+
+        self.grid_rows = new_rows
+        self.grid_cols = new_cols
+        self._sync_canvas_size()
+        self.canvas_layout.activate()
+        self._refresh_selection_ui()
 
     def rebuild_grid(self):
         self.stop_panel_commands("패널 도구 갱신")
@@ -1721,7 +1843,10 @@ class UserPanelWindow(QWidget):
             frame.setStyleSheet(TOOL_STYLE)
 
             frame_layout = QVBoxLayout(frame)
-            frame_layout.setContentsMargins(6, 6, 6, 6)
+            frame_margin = max(2, min(6, self.grid_cell_size // 4))
+            frame_layout.setContentsMargins(
+                frame_margin, frame_margin, frame_margin, frame_margin
+            )
             frame_layout.setSpacing(4)
 
             wtype = cfg.get("widget_type")
@@ -1731,10 +1856,10 @@ class UserPanelWindow(QWidget):
             # 중복되는 외부 라벨을 생성하지 않습니다.
             if wtype not in ("group_box", "tab_container", "slider"):
                 behavior = str(cfg.get("behavior", "none")).upper()
-                title = QLabel(f"[{behavior}] {cfg.get('title', 'Widget')}")
+                title = FittingLabel(f"[{behavior}] {cfg.get('title', 'Widget')}")
                 title.setProperty("panelTitle", True)
                 # 라벨이 수직으로 늘어나는 것을 방지하고 컨트롤 위젯이 공간을 차지하도록 합니다.
-                title.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+                title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
                 title_align_str = str(cfg.get("title_align", "center")).lower()
                 if title_align_str == "left":
                     align_flag = Qt.AlignLeft | Qt.AlignVCenter
@@ -1930,9 +2055,12 @@ class UserPanelWindow(QWidget):
                     c_start = int(cfg.get("col", 0))
 
                     wtype = cfg.get("widget_type")
-                    min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
-                    min_col_span = 1 if wtype == "shape_line" else 4
-                    cfg["row_span"] = max(min_row_span, r_end - r_start + 1)
+                    min_row_span = self._minimum_tool_row_span(wtype)
+                    min_col_span = self._minimum_tool_col_span(wtype)
+                    cfg["row_span"] = (
+                        min_row_span if wtype == "slider"
+                        else max(min_row_span, r_end - r_start + 1)
+                    )
                     cfg["col_span"] = max(min_col_span, c_end - c_start + 1)
                     self.rebuild_grid()
                 elif len(self.selected_configs()) > 1:
@@ -2050,7 +2178,7 @@ class UserPanelWindow(QWidget):
             container = QWidget()
             lay = QGridLayout(container)
             lay.setContentsMargins(0, 0, 0, 0)
-            lay.setHorizontalSpacing(6)
+            lay.setHorizontalSpacing(max(1, self.grid_cell_size // 2))
             lay.setVerticalSpacing(0)
             slider = QSlider(Qt.Horizontal)
             slider.setObjectName("slider")
@@ -2065,46 +2193,92 @@ class UserPanelWindow(QWidget):
             slider.setValue(initial_step)
             initial = min_v + (max_v - min_v) * slider.value() / steps
             display_initial = quantize_value(binding, initial) if behavior == "tx" else initial
-            value_label = QLabel(self._format_slider_value(binding, display_initial))
+            value_label = FittingLabel(
+                self._format_slider_value(binding, display_initial),
+                base_pixel_size=max(9, min(16, self.grid_cell_size - 6)),
+            )
             value_label.setObjectName("value_label")
             value_label.setAlignment(Qt.AlignCenter)
             value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            value_label.setFixedHeight(value_label.fontMetrics().height() + 2)
+            value_label.setFixedHeight(value_label.fontMetrics().height() + 1)
             slider_area = QWidget()
             slider_area_layout = QVBoxLayout(slider_area)
             slider_area_layout.setContentsMargins(0, 0, 0, 0)
             slider_area_layout.setSpacing(0)
             slider_area_layout.addStretch(1)
             slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            slider.setFixedHeight(max(28, slider.sizeHint().height() + 8))
+            slider.setFixedHeight(max(
+                18,
+                min(28, self.grid_cell_size * 7 // 8),
+                slider.sizeHint().height() + 4,
+            ))
             slider_area_layout.addWidget(slider)
             slider_area_layout.addWidget(value_label)
             slider_area_layout.addStretch(1)
-            title = QLabel(f"[{str(behavior).upper()}] {cfg.get('title', 'Widget')}")
+            slider_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            title = FittingLabel(
+                f"[{str(behavior).upper()}] {cfg.get('title', 'Widget')}"
+            )
             title.setObjectName("slider_title")
             title.setProperty("panelTitle", True)
             title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            lay.addWidget(title, 0, 1)
-            lay.addWidget(slider_area, 1, 1, 2, 2)
+            home_width = self.grid_cell_size * 3
+            lay.setColumnMinimumWidth(0, home_width)
+            lay.addWidget(title, 0, 0)
+            lay.addWidget(slider_area, 1, 1, 2, 1)
             value_input = QLineEdit(self._format_slider_value(binding, display_initial))
             value_input.setObjectName("slider_value_input")
-            value_input.setMinimumWidth(40)
-            value_input.setMaximumWidth(130)
+            value_input.setMinimumWidth(28)
+            value_font = value_input.font()
+            value_font.setPixelSize(max(8, min(10, self.grid_cell_size * 5 // 8)))
+            value_input.setFont(value_font)
+            value_font_metrics = QFontMetrics(value_font)
+            widest_input_text = max(
+                self._format_slider_value(binding, min_v),
+                self._format_slider_value(binding, max_v),
+                self._format_slider_value(binding, display_initial),
+            )
+            value_input.setFixedWidth(max(
+                44,
+                min(64, value_font_metrics.horizontalAdvance(widest_input_text) + 4),
+            ))
+            value_input.setFixedHeight(20)
             value_input.setToolTip("입력값은 유지되며 Set을 눌러야 적용됩니다. 숫자가 아니면 Home 값으로 복귀합니다.")
             set_button = QPushButton("Set")
             set_button.setObjectName("slider_set")
+            compact_font = set_button.font()
+            compact_font.setPixelSize(max(8, min(10, self.grid_cell_size // 2)))
+            set_button.setFont(compact_font)
+            set_button.setFixedWidth(max(30, self.grid_cell_size * 2))
+            set_button.setFixedHeight(20)
+            set_button.setStyleSheet("padding: 0px 2px;")
             input_row = QHBoxLayout()
+            input_row.setSpacing(4)
             input_row.addWidget(value_input, 1)
             input_row.addWidget(set_button)
-            lay.addLayout(input_row, 0, 2, Qt.AlignRight)
+            lay.addLayout(input_row, 0, 1, Qt.AlignRight)
             home = QPushButton("Home")
             home.setObjectName("slider_home")
-            home.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+            home.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            home_font = home.font()
+            home_font.setPixelSize(max(10, min(11, self.grid_cell_size * 5 // 8)))
+            home.setFont(home_font)
+            home.setFixedWidth(home_width)
+            home.setStyleSheet("padding: 1px 2px;")
+            home.setFixedHeight(max(
+                home.sizeHint().height(),
+                self.grid_cell_size * 2,
+            ))
             home.setToolTip("Return to Initial Value")
-            lay.addWidget(home, 0, 0, 3, 1)
+            slider_area.setFixedHeight(max(
+                slider.height() + value_label.height(),
+                home.height(),
+            ))
+            lay.addWidget(home, 1, 0, 2, 1, Qt.AlignLeft | Qt.AlignTop)
             lay.setColumnStretch(1, 1)
             lay.setRowStretch(1, 1)
+            container.setFixedHeight(input_row.sizeHint().height() + slider_area.height())
 
             def _on_changed(v):
                 ratio = 0.0 if steps <= 0 else (v / float(steps))
@@ -2113,7 +2287,8 @@ class UserPanelWindow(QWidget):
                 if behavior == "tx":
                     phys = quantize_value(binding, phys)
                 value_label.setText(self._format_slider_value(binding, phys))
-                value_input.setText(self._format_slider_value(binding, phys))
+                if behavior != "tx":
+                    value_input.setText(self._format_slider_value(binding, phys))
                 if behavior == "tx":
                     self._emit_tx(cfg, command_value if cfg.get('tx_commands') else phys)
 
@@ -2125,7 +2300,8 @@ class UserPanelWindow(QWidget):
                 finally:
                     slider.blockSignals(was_blocked)
                 value_label.setText(self._format_slider_value(binding, display_initial))
-                value_input.setText(self._format_slider_value(binding, display_initial))
+                if behavior != "tx":
+                    value_input.setText(self._format_slider_value(binding, display_initial))
                 if behavior == "tx":
                     self._emit_tx(dict(cfg, _slider_home=True), initial)
             home.clicked.connect(_home)
@@ -2139,8 +2315,10 @@ class UserPanelWindow(QWidget):
                         slider.setValue(initial_step)
                     else:
                         _on_changed(initial_step)
+                    value_input.setText(self._format_slider_value(binding, display_initial))
                     return
                 value = max(min_v, min(max_v, value))
+                value_input.setText(self._format_slider_value(binding, value))
                 target = int(round((value - min_v) / (max_v - min_v) * steps))
                 if slider.value() == target:
                     _on_changed(target)
@@ -2152,6 +2330,9 @@ class UserPanelWindow(QWidget):
         if wtype == "spinbox":
             spin = QDoubleSpinBox()
             spin.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+            spin_font = spin.font()
+            spin_font.setPixelSize(max(8, min(14, self.grid_cell_size * 5 // 8)))
+            spin.setFont(spin_font)
             spin.setRange(min_v, max_v)
             step = float(binding.get("tx_resolution", max((max_v - min_v) / 100.0, 0.001)))
             step = max(step, 0.000001)
@@ -2175,7 +2356,7 @@ class UserPanelWindow(QWidget):
             return lamp, None
 
         if wtype == "group_box":
-            grp = QGroupBox(cfg.get("title", "Group"))
+            grp = FittingGroupBox(cfg.get("title", "Group"))
             inner = QWidget()
             inner_layout = QGridLayout(inner)
             inner_layout.setContentsMargins(4, 4, 4, 4)
@@ -2237,7 +2418,7 @@ class UserPanelWindow(QWidget):
             )
             return rect, None
 
-        label = QLabel("-")
+        label = FittingLabel("-", base_pixel_size=16)
         label.setProperty("panelValue", True)
         label.setAlignment(Qt.AlignCenter)
         return label, None
@@ -2260,24 +2441,43 @@ class UserPanelWindow(QWidget):
         if resize_mode:
             row = int(cfg.get("row", 0))
             col = int(cfg.get("col", 0))
-            row_span = int(row_or_span)
-            col_span = int(col_or_span)
+            row_span = min(int(row_or_span), self.grid_rows - row)
+            col_span = min(int(col_or_span), self.grid_cols - col)
         else:
-            row = int(row_or_span)
-            col = int(col_or_span)
             row_span = max(1, int(cfg.get("row_span", 1)))
             col_span = max(1, int(cfg.get("col_span", 1)))
+            row = max(0, min(self.grid_rows - row_span, int(row_or_span)))
+            col = max(0, min(self.grid_cols - col_span, int(col_or_span)))
 
-        parent_w = max(1, parent_widget.width())
-        parent_h = max(1, parent_widget.height())
-        cell_w = float(parent_w) / max(1, self.grid_cols)
-        cell_h = float(parent_h) / max(1, self.grid_rows)
-        x = int(round(col * cell_w))
-        y = int(round(row * cell_h))
-        x2 = int(round((col + col_span) * cell_w))
-        y2 = int(round((row + row_span) * cell_h))
-        w = max(1, x2 - x)
-        h = max(1, y2 - y)
+        if parent_widget is self.canvas:
+            x = col * self.grid_cell_size
+            y = row * self.grid_cell_size
+            w = col_span * self.grid_cell_size
+            h = row_span * self.grid_cell_size
+        else:
+            layout = parent_widget.layout()
+            cell_rect = layout.cellRect(row, col) if isinstance(layout, QGridLayout) else QRect()
+            last_cell = (
+                layout.cellRect(row + row_span - 1, col + col_span - 1)
+                if isinstance(layout, QGridLayout)
+                else QRect()
+            )
+            if not cell_rect.isEmpty() and not last_cell.isEmpty():
+                x = cell_rect.x()
+                y = cell_rect.y()
+                w = last_cell.right() - x + 1
+                h = last_cell.bottom() - y + 1
+            else:
+                parent_w = max(1, parent_widget.width())
+                parent_h = max(1, parent_widget.height())
+                cell_w = float(parent_w) / max(1, self.grid_cols)
+                cell_h = float(parent_h) / max(1, self.grid_rows)
+                x = int(round(col * cell_w))
+                y = int(round(row * cell_h))
+                x2 = int(round((col + col_span) * cell_w))
+                y2 = int(round((row + row_span) * cell_h))
+                w = max(1, x2 - x)
+                h = max(1, y2 - y)
 
         if self._drag_preview_band is None or self._drag_preview_band.parent() is not parent_widget:
             self._hide_drag_preview()
@@ -2360,11 +2560,14 @@ class UserPanelWindow(QWidget):
             return
 
         wtype = cfg.get("widget_type")
-        min_row_span = 1 if wtype == "shape_line" else (3 if wtype == "slider" else 2)
-        min_col_span = 1 if wtype == "shape_line" else 4
+        min_row_span = self._minimum_tool_row_span(wtype)
+        min_col_span = self._minimum_tool_col_span(wtype)
 
         col_span = int(cfg.get("col_span", 1)) + int(dcol_span)
-        row_span = int(cfg.get("row_span", 1)) + int(drow_span)
+        row_span = (
+            min_row_span if wtype == "slider"
+            else int(cfg.get("row_span", 1)) + int(drow_span)
+        )
         cfg["col_span"] = max(min_col_span, min(self.grid_cols, col_span))
         cfg["row_span"] = max(min_row_span, min(self.grid_rows, row_span))
         self.rebuild_grid()
@@ -2815,7 +3018,7 @@ class UserPanelWindow(QWidget):
                     slider.blockSignals(False)
                     if value_label is not None:
                         value_label.setText(self._format_slider_value(binding, v))
-                    if value_input is not None:
+                    if value_input is not None and cfg.get("behavior") != "tx":
                         value_input.setText(self._format_slider_value(binding, v))
             return
 
@@ -3005,7 +3208,8 @@ class UserPanelWindow(QWidget):
 
         self.grid_rows = max(1, int(data.get("grid", {}).get("rows", 12)))
         self.grid_cols = max(1, int(data.get("grid", {}).get("cols", 12)))
-        self.grid_cell_size = max(16, int(data.get("grid", {}).get("cell_size", 32)))
+        saved_cell_size = max(1, int(data.get("grid", {}).get("cell_size", 32)))
+        self.grid_cell_size = max(16, (saved_cell_size + 1) // 2)
         self.widgets_config = list(data.get("widgets", []))
         self.pages = copy.deepcopy(data.get('pages') or [dict(id='default', name='페이지 1')])
         page_ids = [p['id'] for p in self.pages]
@@ -3036,6 +3240,7 @@ class UserPanelWindow(QWidget):
 
         self._reset_history()
         self.rebuild_grid()
+        self._expand_grid_to_viewport()
         self.refresh_mode_ui()
 
     def save_package(self):
