@@ -38,6 +38,37 @@ class FrameFormatTest(unittest.TestCase):
             msg = SimpleNamespace(is_fd=False, length=8, dbc=SimpleNamespace(attributes={'VFrameFormat': attr}))
             self.assertTrue(message_is_fd(msg))
 
+    def test_uppercase_sym_offset_keeps_negative_scale_and_enum_labels(self):
+        content = '''FormatVersion=6.0
+Title="Offset compatibility"
+{ENUMS}
+Enum=State(0="/O: unchanged", 1="ON")
+{SENDRECEIVE}
+[Example]
+ID=02Ah
+Type=FDStandard
+Len=48
+Var=Accel unsigned 312,16 /u:g /f:0.001 /O:-32.767 // /O: comment
+Var=State unsigned 0,1 /e:State
+Var=Positive unsigned 16,8 /o:2.5
+'''
+        for version, loader in [('6.0', UniversalCANMonitor._load_sym_v6),
+                                ('5.0', UniversalCANMonitor._load_sym_v5)]:
+            with self.subTest(version=version), patch('builtins.open', mock_open(
+                    read_data=content.replace('FormatVersion=6.0', f'FormatVersion={version}'))):
+                db = loader(None, 'offset.sym')
+            msg = db.get_message_by_frame_id(0x2A)
+            signal = msg.get_signal_by_name('Accel')
+            self.assertTrue(msg.is_fd)
+            self.assertEqual(msg.length, 48)
+            self.assertEqual((signal.start, signal.length, signal.scale, signal.offset),
+                             (312, 16, 0.001, -32.767))
+            self.assertEqual(msg.get_signal_by_name('Positive').offset, 2.5)
+            self.assertEqual(str(msg.get_signal_by_name('State').choices[0]), '/O: unchanged')
+            payload = bytearray(48)
+            payload[39:41] = (32767).to_bytes(2, 'little')
+            self.assertAlmostEqual(msg.decode(payload, decode_choices=False)['Accel'], 0)
+
     def test_signal_display_precision_covers_dbc_factor_and_offset(self):
         signal = Signal("Angle", 71, 16, byte_order="big_endian",
                         conversion=BaseConversion.factory(scale=0.0625, offset=-780.125))

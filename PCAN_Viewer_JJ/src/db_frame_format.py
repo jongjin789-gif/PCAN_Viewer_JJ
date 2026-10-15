@@ -46,6 +46,11 @@ def load_sym_with_fd(content):
     name = None
     lines = []
     for line in content.splitlines():
+        if re.match(r'^\s*(?:Var|Sig)\s*=', line):
+            # Some SYM exporters use /O: for offset; cantools expects /o:.
+            # Preserve quoted labels and comments verbatim.
+            line = re.sub(r'("(?:\\.|[^"\\])*"|//.*)|(?<!\S)/O:',
+                          lambda match: match.group(1) if match.group(1) is not None else '/o:', line)
         if re.match(r'^\s*FormatVersion\s*=', line) and '//' not in line:
             line += ' // Symbol file'
         section = re.match(r'^\s*\[([^\]]+)\]', line)
