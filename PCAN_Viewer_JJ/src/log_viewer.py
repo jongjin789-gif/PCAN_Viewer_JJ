@@ -737,14 +737,17 @@ class LogViewerWindow(QMainWindow):
                     sig_name = sig_item.text(0)
                     key = (bus_num, can_id)
                     if key in self.signal_data and sig_name in self.signal_data[key]:
-                        graph_sig_name = f"B{bus_num}:{sig_name}"
+                        graph_sig_name = f"B{bus_num}:{can_id:X}:{sig_name}"
                         db_msg = self.db_messages[bus_num][can_id]
                         sig_def = db_msg.get_signal_by_name(sig_name)
                         unit = sig_def.unit if sig_def.unit else ""
                         plot_data[graph_sig_name] = {
                             "times": self.signal_data[key][sig_name][0],
                             "values": self.signal_data[key][sig_name][1],
-                            "unit": unit
+                            "unit": unit,
+                            "bus": bus_num, "id": can_id,
+                            "symbol": db_msg.name, "signal": sig_name,
+                            "choices": sig_def.choices
                         }
                         
         if not plot_data:

@@ -17,6 +17,7 @@ from src.session_storage import (EXTENSION, FORMAT, atomic_write, decode_db, enc
                                  read_session, serialize, validate_structure, write_session,
                                  validate_graph, validate_panel)
 from src.session_graph import graph_state, restore_graph, restore_geometry
+from src.graph_labels import update_realtime_labels
 
 
 def device_identity(data):
@@ -459,6 +460,7 @@ class SessionManager(QObject):
         for graph in prepared['graphs']:
             graph.main_window = m
             graph._bound_signals = m.resolve_graph_bindings(graph.signal_bindings)
+            update_realtime_labels(graph, preserve_custom=True)
             m.active_graphs.append(graph)
             graph._panel_only_hidden = bool(getattr(m, 'user_panel_only', False))
             if not getattr(m, 'user_panel_only', False):

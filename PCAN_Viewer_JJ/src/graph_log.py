@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont
 import pyqtgraph as pg
 from src.graph_toolbar import graph_button, graph_toolbar
+from src.graph_labels import signal_labels
 from src.utils import get_resource_path, TimeAxisItem, TagTextItem
 from src.dialogs import LabelEditorDialog, FormulaDialog
 
@@ -23,6 +24,8 @@ class LogGraphWindow(QWidget):
         self.formulas = {}
         
         self.display_names = {name: name for name in self.signal_names}
+        self.display_names.update(signal_labels({key: data for key, data in plot_data.items()
+                                                 if all(field in data for field in ('bus', 'id', 'symbol', 'signal'))}))
         self.units = {name: data.get("unit", "") for name, data in plot_data.items()}
         self._current_title = ""
         self.window_title_prefix = "Log Graph"
@@ -59,7 +62,7 @@ class LogGraphWindow(QWidget):
         self.combo_hover_signal = QComboBox()
         self.combo_hover_signal.setToolTip("Hover signal")
         for name in self.signal_names:
-            self.combo_hover_signal.addItem(name, name)
+            self.combo_hover_signal.addItem(self.display_names[name], name)
         
         self.label_info = QLabel("Hover over graph...")
         self.label_info.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -132,12 +135,13 @@ class LogGraphWindow(QWidget):
             times = self.plot_data[name]["times"]
             values = self.plot_data[name]["values"]
             self.curve_styles[name] = Qt.SolidLine
-            self.curves[name] = self.plot_widget.plot(times, values, pen=pg.mkPen(color=color, width=1, style=self.curve_styles[name]), name=name)
+            self.curves[name] = self.plot_widget.plot(times, values, pen=pg.mkPen(color=color, width=1, style=self.curve_styles[name]), name=self.display_names[name])
             
             pixmap = QPixmap(16, 16)
             pixmap.fill(QColor(*color))
-            item = QListWidgetItem(QIcon(pixmap), name)
-            item.setToolTip(name)
+            item = QListWidgetItem(QIcon(pixmap), self.display_names[name])
+            data = self.plot_data[name]
+            item.setToolTip(f"B{data['bus']}:{data['symbol']}.{data['signal']}" if 'symbol' in data else name)
             item.setData(Qt.UserRole, name)
             self.legend_widget.addItem(item)
 
@@ -175,6 +179,13 @@ class LogGraphWindow(QWidget):
 
     def _get_enum_string(self, sig_name, val):
         """시그널 이름과 값을 받아 해당하는 Enum 텍스트가 있다면 반환"""
+        data = self.plot_data.get(sig_name, {})
+        if 'choices' in data:
+            choices = data['choices']
+            try:
+                return str(choices[int(val)]) if choices and int(val) in choices else None
+            except (ValueError, OverflowError):
+                return None
         if getattr(self, 'viewer_window', None) and hasattr(self.viewer_window, 'signal_choices'):
             if sig_name.startswith("B"):
                 parts = sig_name.split(":", 1)

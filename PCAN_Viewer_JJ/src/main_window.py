@@ -17,6 +17,7 @@ from PyQt5.QtGui import QFont, QIcon, QKeySequence
 from src.utils import get_resource_path, SortableTreeWidgetItem
 from src.can_threads import CANReceiverThread
 from src.graph_realtime import SignalGraphWindow
+from src.graph_labels import update_realtime_labels
 from src.record_window import RecordWindow
 from src.log_viewer import LogViewerWindow
 from src.tx_panel import TxPanel
@@ -597,13 +598,7 @@ class UniversalCANMonitor(QMainWindow):
         graph = SignalGraphWindow(selected_signals, main_window=self)
         graph.signal_bindings = bindings
         graph._bound_signals = self.resolve_graph_bindings(bindings)
-        for i, key in enumerate(selected_signals):
-            msg, signal = graph._bound_signals[key]
-            label = f'B{bindings[key]["bus"]}:{msg.name}.{signal.name}'
-            graph.display_names[key] = label
-            graph.legend_widget.item(i).setText(label)
-            graph.legend_widget.item(i).setToolTip(label)
-            graph.combo_hover_signal.setItemText(i, label)
+        update_realtime_labels(graph)
         
         # 이미 열려있는 그래프 창이 있다면, 가장 최근 창의 크기를 가져와서 똑같이 맞춰줌
         visible_graphs = [g for g in self.active_graphs if g.isVisible()]
