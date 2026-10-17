@@ -460,6 +460,10 @@ class PacketRegistryDialog(QDialog):
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.list.setAlternatingRowColors(True)
+        # 버튼 클릭으로 포커스를 잃어도 선택 행이 뚜렷하게 보이도록 active/inactive 동일 색상 지정
+        self.list.setStyleSheet(
+            'QTableView::item:selected, QTableView::item:selected:!active '
+            '{ background-color: #1f6feb; color: white; }')
         self.list.setWordWrap(False)
         self.list.verticalHeader().setDefaultSectionSize(28)
         self.list.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -525,6 +529,7 @@ class PacketRegistryDialog(QDialog):
         self.refresh()
         self.list.selectRows(sorted(selected))
         self.list.scrollTo(self.list.currentIndex())
+        self.list.setFocus()
 
     def paste_packet(self):
         clipboard = getattr(self.panel, '_packet_clipboard', None)

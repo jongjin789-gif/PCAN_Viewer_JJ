@@ -1903,6 +1903,10 @@ class UserPanelWindow(QWidget):
 
             if parent_id and parent_id in self.widget_child_hosts and self.widget_child_hosts[parent_id] is not None:
                 host_layout = self.widget_child_hosts[parent_id]
+                parent_ctrl = self.widget_controls.get(parent_id)
+                if isinstance(parent_ctrl, QTabWidget):
+                    tab_index = max(0, min(parent_ctrl.count() - 1, int(cfg.get("tab_index", 0))))
+                    host_layout = parent_ctrl.widget(tab_index).layout()
                 host_layout.addWidget(frame, row, col, row_span, col_span)
             else:
                 self.canvas_layout.addWidget(frame, row, col, row_span, col_span)
@@ -2373,18 +2377,21 @@ class UserPanelWindow(QWidget):
 
         if wtype == "tab_container":
             tabs = QTabWidget()
-            tab1 = QWidget()
-            tab1_layout = QGridLayout(tab1)
-            tab1_layout.setContentsMargins(4, 4, 4, 4)
-            tab1_layout.setHorizontalSpacing(4)
-            tab1_layout.setVerticalSpacing(4)
-            for r in range(self.grid_rows):
-                tab1_layout.setRowStretch(r, 1)
-            for c in range(self.grid_cols):
-                tab1_layout.setColumnStretch(c, 1)
-            tabs.addTab(tab1, "Tab 1")
-            tabs.addTab(QWidget(), "Tab 2")
-            return tabs, tab1_layout
+            names = cfg.get("tabs")
+            if not isinstance(names, list) or not names:
+                names = ["Tab 1", "Tab 2"]
+            for name in names:
+                page = QWidget()
+                layout = QGridLayout(page)
+                layout.setContentsMargins(4, 4, 4, 4)
+                layout.setHorizontalSpacing(4)
+                layout.setVerticalSpacing(4)
+                for r in range(self.grid_rows):
+                    layout.setRowStretch(r, 1)
+                for c in range(self.grid_cols):
+                    layout.setColumnStretch(c, 1)
+                tabs.addTab(page, str(name))
+            return tabs, tabs.widget(0).layout()
 
         if wtype == "shape_line":
             line = QFrame()
