@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-from PyQt5.QtWidgets import QApplication, QSlider
+from PyQt5.QtWidgets import QApplication, QSlider, QMessageBox
 from src.user_panel_v2.window import UserPanelWindow
 
 
@@ -73,12 +73,15 @@ class PanelPagesTest(unittest.TestCase):
         self.assertFalse(panel.property_edit_panel.isHidden())
         self.assertFalse(panel.btn_add_page.isHidden())
         self.assertFalse(panel.btn_rename_page.isHidden())
+        self.assertFalse(panel.btn_delete_page.isHidden())
+        self.assertFalse(panel.btn_delete_page.isEnabled())
 
         panel.set_mode('run')
         self.assertTrue(panel.tool_list_panel.isHidden())
         self.assertTrue(panel.property_edit_panel.isHidden())
         self.assertTrue(panel.btn_add_page.isHidden())
         self.assertTrue(panel.btn_rename_page.isHidden())
+        self.assertTrue(panel.btn_delete_page.isHidden())
         self.assertFalse(panel.page_tabs.isHidden())
 
         panel.set_mode('edit')
@@ -86,6 +89,50 @@ class PanelPagesTest(unittest.TestCase):
         self.assertFalse(panel.property_edit_panel.isHidden())
         self.assertFalse(panel.btn_add_page.isHidden())
         self.assertFalse(panel.btn_rename_page.isHidden())
+        self.assertFalse(panel.btn_delete_page.isHidden())
+
+    def test_delete_page_contents_nested_tools_undo_and_roundtrip(self):
+        group = self.cfg('group')
+        group['widget_type'] = 'group_box'
+        panel = self.panel(dict(widgets=[group, self.cfg('child', parent_id='group')]))
+        self.add_page(panel, 'Keep')
+        keep = self.cfg('keep')
+        panel._normalize_config(keep)
+        panel._upsert_widget_config(keep)
+        panel.rebuild_grid()
+        panel.page_tabs.setCurrentIndex(0)
+        self.assertTrue(panel.btn_delete_page.isEnabled())
+        with patch('src.user_panel_v2.window.QMessageBox.question', return_value=QMessageBox.Yes) as confirm:
+            panel.btn_delete_page.click()
+        self.assertIn('도구 2개', confirm.call_args.args[2])
+        self.assertEqual([c['id'] for c in panel.widgets_config], ['keep'])
+        self.assertEqual(panel.page_tabs.tabText(0), 'Keep')
+        self.assertFalse(panel.btn_delete_page.isEnabled())
+        restored = self.panel(panel._panel_data())
+        self.assertEqual([c['id'] for c in restored.widgets_config], ['keep'])
+        self.assertEqual(len(restored.pages), 1)
+        panel.undo_edit()
+        self.assertEqual(len(panel.pages), 2)
+        self.assertEqual({c['id'] for c in panel.widgets_config}, {'group', 'child', 'keep'})
+        self.assertEqual(panel.active_page_id, 'default')
+        panel.redo_edit()
+        self.assertEqual([c['id'] for c in panel.widgets_config], ['keep'])
+
+    def test_delete_page_cancel_last_page_and_run_are_unchanged(self):
+        panel = self.panel(dict(widgets=[self.cfg('s')]))
+        with patch('src.user_panel_v2.window.QMessageBox.question') as confirm:
+            panel.delete_page(0)
+            confirm.assert_not_called()
+        self.add_page(panel, 'Second')
+        before = copy.deepcopy(panel._panel_data())
+        with patch('src.user_panel_v2.window.QMessageBox.question', return_value=QMessageBox.No):
+            panel.delete_page(0)
+        self.assertEqual(panel._panel_data(), before)
+        panel.set_mode('run')
+        with patch('src.user_panel_v2.window.QMessageBox.question') as confirm:
+            panel.delete_page(0)
+            confirm.assert_not_called()
+        self.assertEqual(len(panel.pages), 2)
 
     def test_copy_between_pages_and_undo(self):
         panel = self.panel(dict(widgets=[self.cfg('s')]))

@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -25,6 +26,11 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+def tab_names(config):
+    names = config.get('tabs')
+    return [str(name) for name in names] if isinstance(names, list) and names else ['Tab 1', 'Tab 2']
 
 
 def minimum_tool_spans(widget_type, cell_size, grid_rows, grid_cols):
@@ -159,6 +165,32 @@ class WidgetConfigDialog(QDialog):
             ptype = candidate.get("widget_type", "group_box")
             self.combo_parent_tool.addItem(f"{ptitle} [{ptype}]", pid)
         form_tool.addRow("Parent Group/Tab", self.combo_parent_tool)
+        self.combo_parent_tab = QComboBox()
+        form_tool.addRow('배치할 탭', self.combo_parent_tab)
+        self.combo_parent_tool.currentIndexChanged.connect(self._refresh_parent_tabs)
+        self._refresh_parent_tabs()
+
+        self.grp_tabs = QGroupBox('탭 설정')
+        tabs_layout = QVBoxLayout(self.grp_tabs)
+        self.list_tabs = QListWidget()
+        self.list_tabs.setMaximumHeight(130)
+        tabs_layout.addWidget(self.list_tabs)
+        tab_buttons = QHBoxLayout()
+        self.btn_add_tab = QPushButton('탭 추가')
+        self.btn_rename_tab = QPushButton('이름 변경')
+        self.btn_delete_tab = QPushButton('탭 삭제')
+        for button, callback in ((self.btn_add_tab, self._add_tab),
+                                 (self.btn_rename_tab, self._rename_tab),
+                                 (self.btn_delete_tab, self._delete_tab)):
+            button.clicked.connect(callback)
+            tab_buttons.addWidget(button)
+        tabs_layout.addLayout(tab_buttons)
+        tab_hint = QLabel('이름은 더블클릭으로 변경할 수 있습니다.\n삭제한 탭의 도구는 인접 탭으로 이동합니다. 최소 한 개의 탭이 필요합니다.')
+        tab_hint.setWordWrap(True)
+        tabs_layout.addWidget(tab_hint)
+        self.list_tabs.currentRowChanged.connect(self._refresh_tab_buttons)
+        self.list_tabs.itemDoubleClicked.connect(lambda _: self._rename_tab())
+        self._set_tabs({})
 
         self.combo_behavior = QComboBox()
         self.combo_behavior.addItems(["none", "tx", "rx"])
@@ -375,6 +407,7 @@ class WidgetConfigDialog(QDialog):
         self.edit_unit = QLineEdit("")
         form_comm.addRow("Unit", self.edit_unit)
 
+        self._register_row(form_tool, self.combo_parent_tab)
         self._register_row(form_comm, self.combo_message)
         self._register_row(form_comm, self.combo_signal)
         self._register_row(form_comm, self.edit_can_id)
@@ -448,6 +481,7 @@ class WidgetConfigDialog(QDialog):
         form_wrap_lay.setContentsMargins(0, 0, 0, 0)
         form_wrap_lay.setSpacing(6)
         form_wrap_lay.addWidget(grp_tool)
+        form_wrap_lay.addWidget(self.grp_tabs)
         form_wrap_lay.addWidget(grp_comm)
         form_wrap_lay.addWidget(grp_value)
         self.grp_commands = QGroupBox("멀티 명령")
@@ -526,6 +560,7 @@ class WidgetConfigDialog(QDialog):
             self.combo_shape_line_dir,
             self.combo_stroke_style,
             self.combo_parent_tool,
+            self.combo_parent_tab,
             self.combo_press_enum,
             self.combo_release_enum,
             self.combo_toggle_on_enum,
@@ -584,6 +619,57 @@ class WidgetConfigDialog(QDialog):
 
         self._apply_precision_setting()
         self._update_visibility()
+
+    def _refresh_parent_tabs(self, *_args):
+        candidate = next((c for c in self.parent_candidates
+                          if c.get('id') == self.combo_parent_tool.currentData()), {})
+        self.combo_parent_tab.clear()
+        if candidate.get('widget_type') == 'tab_container':
+            self.combo_parent_tab.addItems(tab_names(candidate))
+        self._set_row_visible(self.combo_parent_tab, self.combo_parent_tab.count() > 0)
+
+    def _set_tabs(self, config):
+        self.list_tabs.clear()
+        self.list_tabs.addItems(tab_names(config))
+        # Map original child indices to their destination after staged deletions.
+        self._tab_index_map = list(range(self.list_tabs.count()))
+        self.list_tabs.setCurrentRow(0)
+        self._refresh_tab_buttons()
+
+    def _refresh_tab_buttons(self, *_args):
+        selected = self.list_tabs.currentRow() >= 0
+        self.btn_rename_tab.setEnabled(selected)
+        self.btn_delete_tab.setEnabled(selected and self.list_tabs.count() > 1)
+
+    def _add_tab(self):
+        name, ok = QInputDialog.getText(self, '탭 추가', '탭 이름:', text=f'Tab {self.list_tabs.count() + 1}')
+        if ok and name.strip():
+            self.list_tabs.addItem(name.strip())
+            self.list_tabs.setCurrentRow(self.list_tabs.count() - 1)
+            self._refresh_tab_buttons()
+            self._on_any_changed()
+
+    def _rename_tab(self):
+        item = self.list_tabs.currentItem()
+        if item is None:
+            return
+        name, ok = QInputDialog.getText(self, '탭 이름 변경', '탭 이름:', text=item.text())
+        if ok and name.strip():
+            item.setText(name.strip())
+            self._on_any_changed()
+
+    def _delete_tab(self):
+        index = self.list_tabs.currentRow()
+        if index < 0 or self.list_tabs.count() <= 1:
+            return
+        self.list_tabs.takeItem(index)
+        last = self.list_tabs.count() - 1
+        self._tab_index_map = [min(i - (i > index), last) for i in self._tab_index_map]
+        self._refresh_tab_buttons()
+        self._on_any_changed()
+
+    def tab_index_map(self):
+        return list(self._tab_index_map)
 
     def _refresh_commands(self):
         self.command_list.blockSignals(True)
@@ -747,6 +833,8 @@ class WidgetConfigDialog(QDialog):
 
         is_shape = wtype in ("shape_line", "shape_rect")
         is_group_container = wtype in ("group_box", "tab_container")
+        self.grp_tabs.setVisible(wtype == 'tab_container')
+        self._set_row_visible(self.combo_parent_tab, self.combo_parent_tab.count() > 0)
         is_tx = behavior == "tx"
         is_rx = behavior == "rx"
         self.grp_commands.setVisible(self.allow_multi and is_tx and wtype in MULTI_TYPES)
@@ -1207,6 +1295,11 @@ class WidgetConfigDialog(QDialog):
             },
         }
 
+        if config['widget_type'] == 'tab_container':
+            config['tabs'] = [self.list_tabs.item(i).text() for i in range(self.list_tabs.count())]
+        if self.combo_parent_tab.count():
+            config['tab_index'] = self.combo_parent_tab.currentIndex()
+
         if resolve_packet and config['behavior'] == 'tx' and config['widget_type'] != 'sequence' and self.tx_packets is not None:
             packet = find_packet(self.tx_packets, config['binding'])
             if packet is None:
@@ -1223,6 +1316,7 @@ class WidgetConfigDialog(QDialog):
         self.chk_primary_enabled.setChecked(config.get('primary_enabled', True))
         self._refresh_commands()
         self._config_id = str(config.get("id") or self._config_id)
+        self._set_tabs(config)
         self.edit_title.setText(config.get("title", "Widget"))
         self.spin_row.setValue(int(config.get("row", 0)))
         self.spin_col.setValue(int(config.get("col", 0)))
@@ -1233,6 +1327,8 @@ class WidgetConfigDialog(QDialog):
             self.combo_parent_tool.setCurrentIndex(idx_parent)
         else:
             self.combo_parent_tool.setCurrentIndex(0)
+        self.combo_parent_tab.setCurrentIndex(max(0, min(
+            self.combo_parent_tab.count() - 1, int(config.get('tab_index', 0)))))
         self.combo_behavior.setCurrentText(config.get("behavior", "none"))
         self._refresh_widget_types()
         self.combo_title_align.setCurrentText(str(config.get("title_align", "center")).capitalize())

@@ -159,7 +159,9 @@ class ToolProperties(QWidget):
         updated = copy.deepcopy(original)
         updated.update({k: v for k, v in config.items() if k not in ("binding", "z_index")})
         updated.setdefault("binding", {}).update(config["binding"])
-        self.commit([updated], {})
+        tab_maps = ({config['id']: self.editor.tab_index_map()}
+                    if original.get('widget_type') == config.get('widget_type') == 'tab_container' else {})
+        self.commit([updated], {}, tab_maps)
 
     def apply_checked(self):
         if self.panel.mode != "edit":
@@ -195,7 +197,7 @@ class ToolProperties(QWidget):
                     cfg.setdefault("binding", {})[key] = value
         self.commit(configs, speed)
 
-    def commit(self, configs, speed):
+    def commit(self, configs, speed, tab_maps=None):
         try:
             plans = []
             buses = {bus for cfg in configs for bus in self.bound_buses(cfg)}
@@ -235,7 +237,7 @@ class ToolProperties(QWidget):
             for bus in buses if speed else []:
                 self.panel.channel_settings.setdefault(str(bus), {}).update(speed)
             for cfg in configs:
-                self.panel._upsert_widget_config(cfg)
+                self.panel._upsert_widget_config(cfg, (tab_maps or {}).get(cfg['id']))
             self.panel.rebuild_grid()
             self.refresh(force=True)
         except ValueError as exc:

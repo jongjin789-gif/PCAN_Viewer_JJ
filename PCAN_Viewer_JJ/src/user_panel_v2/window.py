@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QInputDialog,
     QTabBar,
@@ -47,7 +48,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .config_dialog import WidgetConfigDialog, minimum_tool_spans
+from .config_dialog import WidgetConfigDialog, minimum_tool_spans, tab_names
 from .sequence import SequenceControl, validate_steps
 from .mode_security import verify_edit_password, verify_communication_password
 from .system_log import SystemLog
@@ -59,6 +60,9 @@ from .properties import ToolProperties
 from .binding import reconcile_binding, unpack_raw, matching_signal, bit_positions, quantize_value
 from .commands import command_bindings
 from .packets import PacketRegistryDialog, PacketRuntime, find_packet, bind_packet, validate_tool, validate_packet, connected_packet_bus
+
+
+_CURRENT_PARENT = object()
 
 
 class FittingLabel(QLabel):
@@ -458,9 +462,12 @@ class UserPanelWindow(QWidget):
         self.btn_add_page.clicked.connect(self.add_page)
         self.btn_rename_page = QPushButton('탭 이름 변경')
         self.btn_rename_page.clicked.connect(lambda: self.rename_page(self.page_tabs.currentIndex()))
+        self.btn_delete_page = QPushButton('탭 삭제')
+        self.btn_delete_page.clicked.connect(lambda: self.delete_page(self.page_tabs.currentIndex()))
         page_row.addWidget(self.page_tabs, 1)
         page_row.addWidget(self.btn_add_page)
         page_row.addWidget(self.btn_rename_page)
+        page_row.addWidget(self.btn_delete_page)
         right_lay.addLayout(page_row)
         right_lay.addWidget(self.canvas_scroll)
         self._sync_page_tabs()
@@ -804,6 +811,7 @@ class UserPanelWindow(QWidget):
         self.active_page_id = self.pages[index]['id']
         self.page_tabs.setCurrentIndex(index)
         self.page_tabs.blockSignals(False)
+        self.btn_delete_page.setEnabled(self.mode == 'edit' and len(self.pages) > 1)
 
     def _page_for(self, cfg):
         # Nested tools belong to their root container's page.
@@ -856,6 +864,28 @@ class UserPanelWindow(QWidget):
             self.pages[index]['name'] = name.strip()
             self._sync_page_tabs()
             self._record_history()
+
+    def delete_page(self, index):
+        if self.mode != 'edit' or len(self.pages) <= 1 or not 0 <= index < len(self.pages):
+            return
+        page = self.pages[index]
+        ids = {cfg['id'] for cfg in self.widgets_config if self._page_for(cfg) == page['id']}
+        reply = QMessageBox.question(
+            self, '탭 삭제',
+            f'"{page["name"]}" 탭을 삭제하시겠습니까?\n포함된 도구 {len(ids)}개도 함께 삭제됩니다.\n실행 취소(Ctrl+Z)로 복원할 수 있습니다.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        self._history_current = self._history_snapshot()
+        self._cancel_draw_mode(refresh=False)
+        self.widgets_config = [cfg for cfg in self.widgets_config if cfg['id'] not in ids]
+        self.pages.pop(index)
+        if self.active_page_id == page['id']:
+            self.active_page_id = self.pages[min(index, len(self.pages) - 1)]['id']
+        self.selected_widget_id = None
+        self.selected_widget_ids.clear()
+        self._sync_page_tabs()
+        self.rebuild_grid()
 
     def _copy_tool_snapshot(self):
         ids = {cfg['id'] for cfg in self.selected_configs()}
@@ -1163,8 +1193,10 @@ class UserPanelWindow(QWidget):
         self.btn_packets.setEnabled(is_edit)
         self.btn_add_page.setEnabled(is_edit)
         self.btn_rename_page.setEnabled(is_edit)
+        self.btn_delete_page.setEnabled(is_edit and len(self.pages) > 1)
         self.btn_add_page.setVisible(is_edit)
         self.btn_rename_page.setVisible(is_edit)
+        self.btn_delete_page.setVisible(is_edit)
         self.btn_init.setEnabled(is_edit)
         self.init_control.setVisible(self.mode == 'run' and bool(self.init_steps))
         self.tool_list_panel.setVisible(is_edit)
@@ -1446,8 +1478,16 @@ class UserPanelWindow(QWidget):
         self.selected_widget_ids.clear()
         self.rebuild_grid()
 
-    def _upsert_widget_config(self, cfg):
+    def _upsert_widget_config(self, cfg, tab_index_map=None):
         target_id = cfg.get("id")
+        if tab_index_map:
+            control = self.widget_controls.get(target_id)
+            if isinstance(control, QTabWidget):
+                control.setCurrentIndex(tab_index_map[max(0, min(len(tab_index_map) - 1, control.currentIndex()))])
+            for child in self.widgets_config:
+                if child.get('parent_id') == target_id:
+                    old_index = max(0, min(len(tab_index_map) - 1, int(child.get('tab_index', 0))))
+                    child['tab_index'] = tab_index_map[old_index]
         for i, old in enumerate(self.widgets_config):
             if old.get("id") == target_id:
                 cfg["z_index"] = old.get("z_index", cfg.get("z_index", 0))
@@ -1568,6 +1608,7 @@ class UserPanelWindow(QWidget):
                         "id": cfg.get("id"),
                         "title": cfg.get("title", "Group"),
                         "widget_type": cfg.get("widget_type", "group_box"),
+                        "tabs": tab_names(cfg),
                     }
                 )
         return out
@@ -1633,7 +1674,7 @@ class UserPanelWindow(QWidget):
             if cfg.get("widget_type") not in ("group_box", "tab_container"):
                 continue
             frame = self.widget_frames.get(wid)
-            if frame is None:
+            if frame is None or not frame.isVisible():
                 continue
             local = frame.mapFromGlobal(global_pos)
             if frame.rect().contains(local):
@@ -1642,17 +1683,27 @@ class UserPanelWindow(QWidget):
                 return wid
         return None
 
+    def _child_host_layout(self, parent_id):
+        control = self.widget_controls.get(parent_id)
+        if isinstance(control, QTabWidget):
+            return control.currentWidget().layout()
+        return self.widget_child_hosts.get(parent_id) or self.canvas_layout
+
     def _cell_from_global_in_parent(self, parent_id, global_pos):
-        if parent_id and parent_id in self.widget_child_hosts and self.widget_child_hosts[parent_id] is not None:
-            host_layout = self.widget_child_hosts[parent_id]
-            host_widget = host_layout.parentWidget()
-            if host_widget is not None and host_widget.width() > 0 and host_widget.height() > 0:
-                local = host_widget.mapFromGlobal(global_pos)
-                x = max(0, min(host_widget.width() - 1, int(local.x())))
-                y = max(0, min(host_widget.height() - 1, int(local.y())))
-                col = self._cell_index_from_coord(x, host_widget.width(), self.grid_cols)
-                row = self._cell_index_from_coord(y, host_widget.height(), self.grid_rows)
-                return row, col
+        layout = self._child_host_layout(parent_id)
+        host = layout.parentWidget()
+        if host is not self.canvas:
+            layout.activate()
+            local = host.mapFromGlobal(global_pos)
+            # Track sizes include layout margins, spacing and tool minimum sizes;
+            # they are not necessarily equal fractions of the container size.
+            columns = [layout.cellRect(0, col) for col in range(self.grid_cols)]
+            rows = [layout.cellRect(row, 0) for row in range(self.grid_rows)]
+            col = next((i for i in range(len(columns) - 1)
+                        if local.x() < columns[i + 1].left()), len(columns) - 1)
+            row = next((i for i in range(len(rows) - 1)
+                        if local.y() < rows[i + 1].top()), len(rows) - 1)
+            return row, col
 
         local = self.canvas.mapFromGlobal(global_pos)
         x = max(0, min(max(0, self.canvas.width() - 1), int(local.x())))
@@ -1660,6 +1711,11 @@ class UserPanelWindow(QWidget):
         col = min(self.grid_cols - 1, x // self.grid_cell_size)
         row = min(self.grid_rows - 1, y // self.grid_cell_size)
         return row, col
+
+    def _drag_move_cell(self, cfg, parent_id, global_pos):
+        row, col = self._cell_from_global_in_parent(parent_id, global_pos - self._drag_offset_global)
+        return (max(0, min(self.grid_rows - int(cfg.get('row_span', 1)), row)),
+                max(0, min(self.grid_cols - int(cfg.get('col_span', 1)), col)))
 
     def _on_tool_list_selection_changed(self, *_args):
         if self._tool_list_syncing:
@@ -1815,10 +1871,26 @@ class UserPanelWindow(QWidget):
         self.grid_cols = new_cols
         self._sync_canvas_size()
         self.canvas_layout.activate()
+        # Container grids share the logical dimensions of the canvas. Keep
+        # existing layouts in sync so rebuilding does not change their tracks.
+        for wid, host_layout in self.widget_child_hosts.items():
+            if host_layout is None:
+                continue
+            control = self.widget_controls.get(wid)
+            layouts = ([control.widget(i).layout() for i in range(control.count())]
+                       if isinstance(control, QTabWidget) else [host_layout])
+            for layout in layouts:
+                for row in range(self.grid_rows):
+                    layout.setRowStretch(row, 1)
+                for col in range(self.grid_cols):
+                    layout.setColumnStretch(col, 1)
+                layout.activate()
         self._refresh_selection_ui()
 
     def rebuild_grid(self):
         self.stop_panel_commands("패널 도구 갱신")
+        tab_indices = {wid: control.currentIndex() for wid, control in self.widget_controls.items()
+                       if isinstance(control, QTabWidget)}
         while self.canvas_layout.count():
             item = self.canvas_layout.takeAt(0)
             w = item.widget()
@@ -1872,6 +1944,9 @@ class UserPanelWindow(QWidget):
                 title_widget_for_binding = title
 
             ctrl, child_host = self._create_runtime_widget(cfg)
+            if isinstance(ctrl, QTabWidget):
+                index = tab_indices.get(cfg['id'], 0)
+                ctrl.setCurrentIndex(max(0, min(ctrl.count() - 1, index)))
             if wtype == "slider":
                 title_widget_for_binding = ctrl.findChild(QLabel, "slider_title")
             # Stretch factor 1 allows the control to expand and fill available vertical space.
@@ -1902,6 +1977,11 @@ class UserPanelWindow(QWidget):
             col_span = max(1, int(cfg.get("col_span", 1)))
 
             if parent_id and parent_id in self.widget_child_hosts and self.widget_child_hosts[parent_id] is not None:
+                # Child size hints must not redistribute grid tracks when the
+                # tool moves, otherwise the drop jumps away from its preview.
+                frame.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+                frame.layout().setSizeConstraint(QLayout.SetNoConstraint)
+                frame.setMinimumSize(0, 0)
                 host_layout = self.widget_child_hosts[parent_id]
                 parent_ctrl = self.widget_controls.get(parent_id)
                 if isinstance(parent_ctrl, QTabWidget):
@@ -2016,10 +2096,7 @@ class UserPanelWindow(QWidget):
             else:
                 new_parent = cfg.get('parent_id') if self._ctrl_drag_copy or len(self.selected_configs()) > 1 else self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
                 # 위젯의 좌상단이 위치할 목표 지점을 오프셋을 적용하여 계산합니다.
-                adjusted_pos = end_pos
-                if self._drag_offset_global:
-                    adjusted_pos -= self._drag_offset_global
-                preview_row, preview_col = self._cell_from_global_in_parent(new_parent, adjusted_pos)
+                preview_row, preview_col = self._drag_move_cell(cfg, new_parent, end_pos)
                 self._show_drag_preview(cfg, preview_row, preview_col, parent_id=new_parent, resize_mode=False)
 
         def _on_release(event):
@@ -2076,12 +2153,12 @@ class UserPanelWindow(QWidget):
                 else:
                     new_parent = self._hit_group_parent_from_global(end_pos, exclude_id=widget_id)
                     # 최종 위치를 오프셋을 적용하여 계산합니다.
-                    adjusted_pos = end_pos
-                    if self._drag_offset_global:
-                        adjusted_pos -= self._drag_offset_global
-                    row_new, col_new = self._cell_from_global_in_parent(new_parent, adjusted_pos)
+                    row_new, col_new = self._drag_move_cell(cfg, new_parent, end_pos)
 
                     cfg["parent_id"] = new_parent
+                    parent_ctrl = self.widget_controls.get(new_parent)
+                    if isinstance(parent_ctrl, QTabWidget):
+                        cfg['tab_index'] = parent_ctrl.currentIndex()
                     cfg["row"] = row_new
                     cfg["col"] = col_new
                     self.rebuild_grid()
@@ -2364,8 +2441,9 @@ class UserPanelWindow(QWidget):
             inner = QWidget()
             inner_layout = QGridLayout(inner)
             inner_layout.setContentsMargins(4, 4, 4, 4)
-            inner_layout.setHorizontalSpacing(4)
-            inner_layout.setVerticalSpacing(4)
+            # QGridLayout inserts spacing only around occupied tracks, which
+            # shifts cell positions as tools move. Use a continuous grid.
+            inner_layout.setSpacing(0)
             for r in range(self.grid_rows):
                 inner_layout.setRowStretch(r, 1)
             for c in range(self.grid_cols):
@@ -2377,15 +2455,11 @@ class UserPanelWindow(QWidget):
 
         if wtype == "tab_container":
             tabs = QTabWidget()
-            names = cfg.get("tabs")
-            if not isinstance(names, list) or not names:
-                names = ["Tab 1", "Tab 2"]
-            for name in names:
+            for name in tab_names(cfg):
                 page = QWidget()
                 layout = QGridLayout(page)
                 layout.setContentsMargins(4, 4, 4, 4)
-                layout.setHorizontalSpacing(4)
-                layout.setVerticalSpacing(4)
+                layout.setSpacing(0)
                 for r in range(self.grid_rows):
                     layout.setRowStretch(r, 1)
                 for c in range(self.grid_cols):
@@ -2430,17 +2504,11 @@ class UserPanelWindow(QWidget):
         label.setAlignment(Qt.AlignCenter)
         return label, None
 
-    def _preview_parent_widget(self, cfg, parent_id=None):
-        target_parent_id = cfg.get("parent_id") if parent_id is None else parent_id
-        parent_id = target_parent_id
-        if parent_id and parent_id in self.widget_child_hosts and self.widget_child_hosts[parent_id] is not None:
-            host_layout = self.widget_child_hosts[parent_id]
-            host_widget = host_layout.parentWidget()
-            if host_widget is not None:
-                return host_widget
-        return self.canvas
+    def _preview_parent_widget(self, cfg, parent_id=_CURRENT_PARENT):
+        target_parent_id = cfg.get('parent_id') if parent_id is _CURRENT_PARENT else parent_id
+        return self._child_host_layout(target_parent_id).parentWidget()
 
-    def _show_drag_preview(self, cfg, row_or_span, col_or_span, parent_id=None, resize_mode=False):
+    def _show_drag_preview(self, cfg, row_or_span, col_or_span, parent_id=_CURRENT_PARENT, resize_mode=False):
         parent_widget = self._preview_parent_widget(cfg, parent_id=parent_id)
         if parent_widget is None:
             return

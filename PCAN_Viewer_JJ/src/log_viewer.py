@@ -10,6 +10,8 @@ from PyQt5.QtGui import QIcon, QFont, QColor, QKeySequence
 from src.utils import get_resource_path, SortableTreeWidgetItem
 from src.can_threads import LogParserThread
 from src.graph_log import LogGraphWindow
+from src.button_icons import decorate_button
+from src.bus_config import BUS_IDS
 
 
 class LogViewerWindow(QMainWindow):
@@ -31,6 +33,19 @@ class LogViewerWindow(QMainWindow):
         self._populate_progress = None
         self._is_closing = False
         self._fallback_notice_buses = set()
+        self._populating = False
+        self._filtering = False
+        self._filter_index = 0
+        self._filter_range = None
+        self._filter_bus = None
+        self._filter_matches = []
+        self._visible_log_rows = None
+        self._hidden_log_rows = set()
+        self._filter_restore_count = 0
+        self._filter_chunk_size = 1024
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.timeout.connect(self._apply_filter_chunk)
 
         # Transmission state
         self.is_sending = False
@@ -64,11 +79,13 @@ class LogViewerWindow(QMainWindow):
         dbc_layout = QVBoxLayout(self.dbc_tab)
         
         dbc_btn_layout = QHBoxLayout()
-        self.btn_view_graph = QPushButton("View Graph for Selection")
+        self.btn_view_graph = QPushButton("Graph View")
+        decorate_button(self.btn_view_graph, 'graph', '선택한 신호의 로그 그래프를 엽니다.')
         self.btn_view_graph.clicked.connect(self.open_graph)
         dbc_btn_layout.addWidget(self.btn_view_graph)
         
         self.btn_uncheck_all = QPushButton("Uncheck All")
+        decorate_button(self.btn_uncheck_all, 'uncheck', '로그 신호의 체크를 모두 해제합니다.')
         self.btn_uncheck_all.clicked.connect(self.uncheck_all_signals)
         dbc_btn_layout.addWidget(self.btn_uncheck_all)
         
@@ -106,28 +123,40 @@ class LogViewerWindow(QMainWindow):
         self.btn_send = QPushButton("전송")
         self.btn_send.setCheckable(True)
         self.btn_send_single = QPushButton("선택 전송")
-        self.btn_save = QPushButton("Save")
+        self.btn_save = QPushButton("SAVE")
         self.btn_save.clicked.connect(self.save_filtered_log)
         self.chk_repeat = QCheckBox("반복")
         log_ctrl_layout1.addWidget(self.btn_send)
         log_ctrl_layout1.addWidget(self.btn_send_single)
-        log_ctrl_layout1.addWidget(self.btn_save)
         log_ctrl_layout1.addWidget(self.chk_repeat)
         log_ctrl_layout1.addStretch()
+        log_ctrl_layout1.addWidget(self.btn_save)
+        log_layout.addLayout(log_ctrl_layout1)
 
-        log_ctrl_layout1.addWidget(QLabel("CAN ID Filter:"))
+        log_filter_layout = QHBoxLayout()
+        log_filter_layout.addWidget(QLabel("CAN 버스"))
+        self.combo_filter_bus = QComboBox()
+        self.combo_filter_bus.addItem('ALL', None)
+        for bus in BUS_IDS:
+            self.combo_filter_bus.addItem(f'BUS{bus}', bus)
+        log_filter_layout.addWidget(self.combo_filter_bus)
+        log_filter_layout.addWidget(QLabel("CAN ID 필터"))
         self.edit_filter_low = QLineEdit("0x000")
         self.edit_filter_low.setMinimumWidth(105)
-        self.edit_filter_high = QLineEdit("0x1FFFFFFF")
+        self.edit_filter_high = QLineEdit("0x7FF")
         self.edit_filter_high.setMinimumWidth(105)
         self.btn_filter = QPushButton("필터")
         self.btn_filter.setCheckable(True)
-        log_ctrl_layout1.addWidget(self.edit_filter_low)
-        log_ctrl_layout1.addWidget(QLabel("~"))
-        log_ctrl_layout1.addWidget(self.edit_filter_high)
-        log_ctrl_layout1.addWidget(self.btn_filter)
-
-        log_layout.addLayout(log_ctrl_layout1)
+        self.btn_cancel_filter = QPushButton("필터 취소")
+        self.btn_cancel_filter.setToolTip('진행 중인 필터를 중단하고 전체 버스·ID의 로그를 다시 표시합니다.')
+        self.btn_cancel_filter.clicked.connect(self.cancel_filter)
+        log_filter_layout.addWidget(self.edit_filter_low)
+        log_filter_layout.addWidget(QLabel("~"))
+        log_filter_layout.addWidget(self.edit_filter_high)
+        log_filter_layout.addWidget(self.btn_filter)
+        log_filter_layout.addWidget(self.btn_cancel_filter)
+        log_filter_layout.addStretch()
+        log_layout.addLayout(log_filter_layout)
 
         # Log grid view
         self.log_table = QTableWidget()
@@ -145,6 +174,7 @@ class LogViewerWindow(QMainWindow):
         self.btn_send.clicked.connect(self.on_send_toggled)
         self.btn_send_single.clicked.connect(self.on_send_single_clicked)
         self.btn_filter.toggled.connect(self.apply_filter)
+        self.combo_filter_bus.currentIndexChanged.connect(lambda: self.apply_filter(True) if self.btn_filter.isChecked() else None)
         self.edit_filter_low.editingFinished.connect(lambda: self.apply_filter(True) if self.btn_filter.isChecked() else None)
         self.edit_filter_high.editingFinished.connect(lambda: self.apply_filter(True) if self.btn_filter.isChecked() else None)
 
@@ -163,16 +193,23 @@ class LogViewerWindow(QMainWindow):
         if self.main_window:
             any_bus_connected = any(bus is not None for bus in self.main_window.buses.values())
 
-        self.btn_send.setEnabled(any_bus_connected)
+        busy = self._filtering or self._populating
+        self.btn_send.setEnabled(any_bus_connected and not busy)
         self.btn_send.setText("정지" if self.is_sending else "전송")
 
         is_row_selected = self.log_table.currentRow() >= 0
-        self.btn_send_single.setEnabled(any_bus_connected and not self.is_sending and is_row_selected)
+        self.btn_send_single.setEnabled(any_bus_connected and not self.is_sending and is_row_selected and not busy)
+        self.btn_save.setEnabled(not busy)
+        self.shortcut_copy.setEnabled(not busy)
 
         self.chk_repeat.setEnabled(not self.is_sending)
+        self.combo_filter_bus.setEnabled(not self.is_sending and not self._populating)
         self.edit_filter_low.setEnabled(not self.is_sending)
         self.edit_filter_high.setEnabled(not self.is_sending)
-        self.btn_filter.setEnabled(not self.is_sending)
+        self.btn_filter.setEnabled(not self.is_sending and not self._populating)
+        self.btn_cancel_filter.setEnabled(
+            not self.is_sending and not self._populating
+            and (self.btn_filter.isChecked() or (self._filtering and self._filter_range is not None)))
         
         if not any_bus_connected and self.is_sending:
             self.stop_sending()
@@ -212,7 +249,8 @@ class LogViewerWindow(QMainWindow):
             self.tree.blockSignals(False)
         
     def start_parsing(self):
-        self.progress = QProgressDialog("Parsing CAN log file...", "Cancel", 0, 100, self)
+        self.progress = QProgressDialog("CAN 로그 파일을 분석하고 있습니다...", "취소", 0, 100, self)
+        self.progress.setWindowTitle("로그 분석 중")
         self.progress.setWindowModality(Qt.WindowModal)
         
         self.parser_thread = LogParserThread(self.file_path, self.db_messages)
@@ -241,6 +279,10 @@ class LogViewerWindow(QMainWindow):
                    details=getattr(self.parser_thread, "last_error_details", None))
 
     def populate_log_table(self):
+        self._cancel_filter()
+        self._populating = False
+        self._visible_log_rows = None
+        self._hidden_log_rows.clear()
         self.log_table.setRowCount(0)
         total = len(self.raw_log_data)
         if total == 0:
@@ -252,14 +294,17 @@ class LogViewerWindow(QMainWindow):
         self.log_table.setRowCount(total)
 
         self._populate_index = 0
-        self._populate_progress = QProgressDialog("Rendering CAN log entries...", None, 0, total, self)
+        self._populating = True
+        self.update_control_states()
+        self._populate_progress = QProgressDialog("로그 데이터를 표시하고 있습니다...", None, 0, total, self)
+        self._populate_progress.setWindowTitle("로그 불러오는 중")
         self._populate_progress.setWindowModality(Qt.WindowModal)
         self._populate_progress.setCancelButton(None)
         self._populate_progress.show()
         QTimer.singleShot(0, self._populate_log_table_chunk)
 
     def _populate_log_table_chunk(self):
-        if self._is_closing:
+        if self._is_closing or not self._populating:
             return
 
         total = len(self.raw_log_data)
@@ -288,6 +333,7 @@ class LogViewerWindow(QMainWindow):
             self._populate_progress.close()
             self._populate_progress = None
 
+        self._populating = False
         self.log_table.setUpdatesEnabled(True)
         if self.btn_filter.isChecked():
             self.apply_filter(True)
@@ -351,40 +397,116 @@ class LogViewerWindow(QMainWindow):
             self.filter_tree_items(self.search_input.text())
 
     def apply_filter(self, checked):
-        if not checked:
-            for i in range(self.log_table.rowCount()):
-                self.log_table.setRowHidden(i, False)
+        if self._is_closing or self.is_sending or self._populating:
             return
-
-        try:
-            low_id = int(self.edit_filter_low.text(), 16)
-            high_id = int(self.edit_filter_high.text(), 16)
-            if not 0 <= low_id <= high_id <= 0x1FFFFFFF:
-                raise ValueError()
-        except ValueError:
-            QMessageBox.warning(self, "입력 오류", "CAN ID는 0x000~0x1FFFFFFF 범위의 16진수이며 시작값은 끝값 이하여야 합니다.")
-            self.btn_filter.setChecked(False)
-            return
-
-        for i in range(self.log_table.rowCount()):
+        bounds = None
+        if checked:
             try:
-                can_id = int(self.log_table.item(i, 4).text(), 16)
-                if low_id <= can_id <= high_id:
-                    self.log_table.setRowHidden(i, False)
+                low_id = int(self.edit_filter_low.text(), 16)
+                high_id = int(self.edit_filter_high.text(), 16)
+                if not 0 <= low_id <= high_id <= 0x1FFFFFFF:
+                    raise ValueError()
+                bounds = (low_id, high_id)
+            except ValueError:
+                QMessageBox.warning(self, "입력 오류", "CAN ID는 0x000~0x1FFFFFFF 범위의 16진수이며 시작값은 끝값 이하여야 합니다.")
+                self.btn_filter.setChecked(False)
+                return
+
+        bus = self.combo_filter_bus.currentData() if checked else None
+        if checked and bounds == self._filter_range and bus == self._filter_bus:
+            if self._filtering or self._visible_log_rows is not None:
+                return
+        if not checked and self._filtering and self._filter_range is None:
+            return
+
+        # Stop the old request before starting new work. Clearing a filter only
+        # restores rows already hidden; it does not scan the original log again.
+        self._cancel_filter()
+        self._filter_range = bounds
+        self._filter_bus = bus
+        self._filter_index = 0
+        self._filter_restore_count = len(self._hidden_log_rows) if not checked else 0
+        self._filter_matches = []
+        self._filtering = True
+        self.update_control_states()
+        self._apply_filter_chunk()
+
+    def cancel_filter(self):
+        if self._is_closing or self.is_sending or self._populating:
+            return
+        blocked = self.btn_filter.blockSignals(True)
+        self.btn_filter.setChecked(False)
+        self.btn_filter.blockSignals(blocked)
+        self.apply_filter(False)
+
+    def _cancel_filter(self):
+        self._filter_timer.stop()
+        self._filtering = False
+        self._filter_matches = []
+
+    def _apply_filter_chunk(self):
+        if self._is_closing or not self._filtering:
+            return
+        total = self.log_table.rowCount()
+        restoring = self._filter_range is None
+        work_total = self._filter_restore_count if restoring else total
+        end = min(self._filter_index + self._filter_chunk_size, work_total)
+        deadline = time.perf_counter() + 0.008
+        bounds = self._filter_range
+        bus = self._filter_bus
+        table = self.log_table
+        updates_enabled = table.updatesEnabled()
+        signals_blocked = table.blockSignals(True)
+        table.setUpdatesEnabled(False)
+        try:
+            while self._filter_index < end:
+                if restoring:
+                    row = self._hidden_log_rows.pop()
+                    table.setRowHidden(row, False)
                 else:
-                    self.log_table.setRowHidden(i, True)
-            except (ValueError, AttributeError):
-                self.log_table.setRowHidden(i, True)
+                    row = self._filter_index
+                    entry = self.raw_log_data[row] if row < len(self.raw_log_data) else None
+                    visible = (entry is not None and bounds[0] <= entry['can_id'] <= bounds[1]
+                               and (bus is None or entry.get('bus', 1) == bus))
+                    if table.isRowHidden(row) == visible:
+                        table.setRowHidden(row, not visible)
+                    if visible:
+                        self._hidden_log_rows.discard(row)
+                        self._filter_matches.append(row)
+                    else:
+                        self._hidden_log_rows.add(row)
+                self._filter_index += 1
+                if self._filter_index % 64 == 0 and time.perf_counter() >= deadline:
+                    break
+        finally:
+            table.blockSignals(signals_blocked)
+            table.setUpdatesEnabled(updates_enabled)
+
+        if self._filter_index < work_total:
+            label = '전체 로그 복원 중' if restoring else '로그 필터 처리 중'
+            self.statusBar().showMessage(f'{label}: {self._filter_index:,} / {work_total:,}')
+            self._filter_timer.start(0)
+            return
+
+        self._visible_log_rows = self._filter_matches if bounds is not None else None
+        count = len(self._filter_matches) if bounds is not None else total
+        self._filter_matches = []
+        self._filtering = False
+        message = f'필터 취소 완료: 전체 {total:,}개 표시' if restoring else f'로그 필터: {count:,} / {total:,}개 표시'
+        self.statusBar().showMessage(message)
+        self.update_control_states()
 
     def get_visible_log_data(self):
         """필터를 존중하여 현재 표시되는 로그 데이터 목록을 반환합니다."""
-        visible_logs = []
-        for i in range(self.log_table.rowCount()):
-            if not self.log_table.isRowHidden(i):
-                visible_logs.append(self.raw_log_data[i])
-        return visible_logs
+        if self._filtering or self._populating:
+            return []
+        if self._visible_log_rows is None:
+            return self.raw_log_data[:self.log_table.rowCount()]
+        return [self.raw_log_data[row] for row in self._visible_log_rows]
 
     def save_filtered_log(self):
+        if self._filtering or self._populating:
+            return
         logs = self.get_visible_log_data()
         if not logs:
             QMessageBox.information(self, "Save", "저장할 필터 결과가 없습니다.")
@@ -451,6 +573,8 @@ class LogViewerWindow(QMainWindow):
         return fallback_bus, self.main_window.buses.get(fallback_bus)
 
     def copy_selected_logs_to_clipboard(self):
+        if self._filtering or self._populating:
+            return
         selected_rows = sorted(list(set(index.row() for index in self.log_table.selectedIndexes())))
         if not selected_rows:
             return
@@ -486,7 +610,7 @@ class LogViewerWindow(QMainWindow):
             self.stop_sending()
 
     def start_sending(self):
-        if not self.main_window: return
+        if not self.main_window or self._filtering or self._populating: return
         self._send_logs = self.get_visible_log_data()
         if not self._send_logs:
             self.btn_send.setChecked(False)
@@ -540,7 +664,7 @@ class LogViewerWindow(QMainWindow):
             self.btn_send.setChecked(False)
 
     def on_send_single_clicked(self):
-        if not self.main_window or self.is_sending: return
+        if not self.main_window or self.is_sending or self._filtering or self._populating: return
 
         selected_row = self.log_table.currentRow()
         if selected_row < 0 or self.log_table.isRowHidden(selected_row):
@@ -786,6 +910,8 @@ class LogViewerWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._is_closing = True
+        self._cancel_filter()
+        self._populating = False
         self.stop_sending()
         if hasattr(self, 'progress'):
             self.progress.close()
@@ -812,6 +938,10 @@ class LogViewerWindow(QMainWindow):
     def refresh_parsing(self):
         """메인 윈도우에서 DB가 변경되었을 때 로그 뷰어 상태를 갱신합니다"""
         self.stop_sending()
+        self._cancel_filter()
+        self._visible_log_rows = None
+        self._hidden_log_rows.clear()
+        self._populating = False
         if hasattr(self, 'parser_thread') and self.parser_thread.isRunning():
             self.parser_thread.cancel()
             self.parser_thread.wait()
