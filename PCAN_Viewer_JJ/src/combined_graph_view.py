@@ -142,26 +142,33 @@ class CombinedGraphView(QWidget):
                 g.hLine.setVisible(False)
 
     def do_reset_zoom(self):
-        latest_values = [graph.get_latest_time() for graph in self.graphs]
+        realtime_graphs = self._realtime_graphs()
+        if not realtime_graphs:
+            self.do_fit_all_data()
+            return
+        latest_values = [graph.get_latest_time() for graph in realtime_graphs]
         latest_values = [value for value in latest_values if value is not None]
         if not latest_values:
             for graph in self.graphs:
                 graph.set_auto_y(True)
             return
         latest = max(latest_values)
-        x_min = latest - self.graphs[0].time_span
+        x_min = latest - realtime_graphs[0].time_span
         for index, graph in enumerate(self.graphs):
             graph.set_time_range(x_min, latest, follow_latest=True, apply_x=index == 0)
 
     def do_fit_all_data(self):
-        timestamps = [timestamp for graph in self.graphs for series in graph.times.values()
-                      if series for timestamp in (series[0], series[-1])]
-        if not timestamps:
-            self.do_reset_zoom()
+        bounds = [graph.get_time_bounds() for graph in self.graphs]
+        bounds = [span for span in bounds if span is not None]
+        if not bounds:
+            for graph in self.graphs:
+                graph.set_auto_y(True)
             return
-        x_min, x_max = min(timestamps), max(timestamps)
+        x_min = min(start for start, _ in bounds)
+        x_max = max(end for _, end in bounds)
         if x_min == x_max:
-            x_min -= self.graphs[0].time_span
+            realtime_graphs = self._realtime_graphs()
+            x_min -= realtime_graphs[0].time_span if realtime_graphs else 1.0
         for index, graph in enumerate(self.graphs):
             graph.set_time_range(x_min, x_max, follow_latest=False, apply_x=index == 0)
 

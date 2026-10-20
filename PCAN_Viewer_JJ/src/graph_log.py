@@ -161,6 +161,27 @@ class LogGraphWindow(QWidget):
         self.on_hover_target_changed()
         self.plot_widget.scene().sigMouseClicked.connect(self.on_mouse_clicked)
 
+    def get_time_bounds(self):
+        bounds = [(data['times'][0], data['times'][-1])
+                  for data in self.plot_data.values() if len(data['times'])]
+        if not bounds:
+            return None
+        return min(start for start, _ in bounds), max(end for _, end in bounds)
+
+    def set_auto_y(self, enabled):
+        view_box = self.plot_widget.getViewBox()
+        view_box.setAutoVisible(y=bool(enabled))
+        view_box.enableAutoRange(axis='y', enable=bool(enabled))
+        if enabled:
+            view_box.updateAutoRange()
+
+    def set_time_range(self, x_min, x_max, follow_latest=False, apply_x=True):
+        # Static logs share Combined's range API but never follow live data.
+        self.plot_widget.getViewBox().enableAutoRange(axis='x', enable=False)
+        if apply_x:
+            self.plot_widget.setXRange(float(x_min), float(x_max), padding=0)
+        self.set_auto_y(True)
+
     def get_parent_window(self):
         """상위 부모 윈도우(메인 또는 뷰어)를 반환합니다."""
         return getattr(self, 'main_window', None) or getattr(self, 'viewer_window', None)

@@ -670,6 +670,12 @@ class SignalGraphWindow(QWidget):
                 if other is not self and other.chk_sync.isChecked() and other.isVisible():
                     other._set_playing_state(playing, sync=False)
 
+    def get_time_bounds(self):
+        bounds = [(series[0], series[-1]) for series in self.times.values() if len(series)]
+        if not bounds:
+            return None
+        return min(start for start, _ in bounds), max(end for _, end in bounds)
+
     def get_latest_time(self):
         latest = None
         for t_deque in self.times.values():
