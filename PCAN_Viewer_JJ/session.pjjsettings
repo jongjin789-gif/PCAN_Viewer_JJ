@@ -39,7 +39,7 @@
   "can": {
     "1": {
       "device": null,
-      "channel": "No available PCAN channels found",
+      "channel": "",
       "bitrate": "500 kBit/s",
       "fd_iso": "ISO",
       "data_bitrate": "N/A",
@@ -47,7 +47,7 @@
     },
     "2": {
       "device": null,
-      "channel": "No available PCAN channels found",
+      "channel": "",
       "bitrate": "500 kBit/s",
       "fd_iso": "ISO",
       "data_bitrate": "N/A",
@@ -55,7 +55,7 @@
     },
     "3": {
       "device": null,
-      "channel": "No available PCAN channels found",
+      "channel": "",
       "bitrate": "500 kBit/s",
       "fd_iso": "ISO",
       "data_bitrate": "N/A",
@@ -63,7 +63,7 @@
     },
     "4": {
       "device": null,
-      "channel": "No available PCAN channels found",
+      "channel": "",
       "bitrate": "500 kBit/s",
       "fd_iso": "ISO",
       "data_bitrate": "N/A",
