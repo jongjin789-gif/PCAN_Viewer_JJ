@@ -54,7 +54,7 @@ from .mode_security import verify_edit_password, verify_communication_password
 from .system_log import SystemLog
 from .dbc_identity import database_signature
 from src.utils import get_resource_path
-from .storage import PACKAGE_EXT, load_bundle, load_panel_json, save_bundle, save_panel_json
+from .storage import PACKAGE_EXT, load_bundle, save_bundle
 from .styles import TOOL_STYLE, lamp_style
 from .properties import ToolProperties
 from .binding import reconcile_binding, unpack_raw, matching_signal, bit_positions, quantize_value
@@ -63,6 +63,7 @@ from .packets import PacketRegistryDialog, PacketRuntime, find_packet, bind_pack
 
 
 _CURRENT_PARENT = object()
+_PACKAGE_FILTER = f"패널 + DBC/SYM 패키지 (*{PACKAGE_EXT})"
 
 
 class FittingLabel(QLabel):
@@ -679,17 +680,12 @@ class UserPanelWindow(QWidget):
 
         self.act_save_panel = QAction("Save Panel", self)
         self.act_load_panel = QAction("Load Panel", self)
-        self.act_save_pkg = QAction("Save Package", self)
-        self.act_load_pkg = QAction("Load Package", self)
+        self.act_save_panel.setToolTip('패널과 DBC/SYM을 하나의 .pjjupkg 파일로 저장합니다.')
+        self.act_load_panel.setToolTip('.pjjupkg 파일에서 패널과 DBC/SYM을 함께 불러옵니다.')
         self.act_save_panel.triggered.connect(self.save_panel_to_file)
         self.act_load_panel.triggered.connect(self.load_panel_from_file)
-        self.act_save_pkg.triggered.connect(self.save_package)
-        self.act_load_pkg.triggered.connect(self.load_package)
         menu_file.addAction(self.act_save_panel)
         menu_file.addAction(self.act_load_panel)
-        menu_file.addSeparator()
-        menu_file.addAction(self.act_save_pkg)
-        menu_file.addAction(self.act_load_pkg)
 
         menu_comm = self.menu_bar.addMenu("Communication")
         self.act_open_communication = QAction("CAN / DBC Settings…", self)
@@ -3241,31 +3237,16 @@ class UserPanelWindow(QWidget):
         }
 
     def save_panel_to_file(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save User Panel", "", "User Panel (*.upp.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "유저 패널 저장", "", _PACKAGE_FILTER)
         if not path:
             return
-        try:
-            save_panel_json(path, self._panel_data())
-            self.log_system(f'패널 설정 저장: {path}')
-            QMessageBox.information(self, "Saved", "User panel saved successfully.")
-        except Exception as e:
-            self.log_system(f'패널 설정 저장 실패: {e}', 'ERROR')
-            show_error(self, "Error", f"Save failed:\n{e}")
+        self._save_package_file(path)
 
     def load_panel_from_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load User Panel", "", "User Panel (*.upp.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "유저 패널 불러오기", "", _PACKAGE_FILTER)
         if not path:
             return
-
-        try:
-            data = load_panel_json(path)
-            self._load_panel_data(data)
-            self.set_mode('standby')
-            self.log_system(f'패널 설정 불러오기: {path}')
-            QMessageBox.information(self, "Loaded", "User panel loaded successfully.")
-        except Exception as e:
-            self.log_system(f'패널 설정 불러오기 실패: {e}', 'ERROR')
-            show_error(self, "Error", f"Load failed:\n{e}")
+        self._load_package_file(path)
 
     def _load_panel_data(self, data):
         if not isinstance(data, dict):
@@ -3318,16 +3299,7 @@ class UserPanelWindow(QWidget):
         self._expand_grid_to_viewport()
         self.refresh_mode_ui()
 
-    def save_package(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save User Panel Package",
-            "",
-            f"User Panel Package (*{PACKAGE_EXT})",
-        )
-        if not path:
-            return
-
+    def _save_package_file(self, path):
         if not hasattr(self.main_window, "get_db_file_paths_by_bus"):
             QMessageBox.warning(self, "Not Supported", "Main window does not support DB bundle export.")
             return
@@ -3341,18 +3313,12 @@ class UserPanelWindow(QWidget):
             self.log_system(f'패널 패키지 저장 실패: {e}', 'ERROR')
             show_error(self, "Error", f"Package save failed:\n{e}")
 
-    def load_package(self):
+    def _load_package_file(self, path):
+        if not path.lower().endswith(PACKAGE_EXT):
+            QMessageBox.warning(self, '지원하지 않는 파일', '.pjjupkg 패널 패키지를 선택해주세요.')
+            return
         if not self._authorize_communication():
             return
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load User Panel Package",
-            "",
-            f"User Panel Package (*{PACKAGE_EXT})",
-        )
-        if not path:
-            return
-
         if not hasattr(self.main_window, "replace_db_files_by_bus"):
             QMessageBox.warning(self, "Not Supported", "Main window does not support DB bundle import.")
             return

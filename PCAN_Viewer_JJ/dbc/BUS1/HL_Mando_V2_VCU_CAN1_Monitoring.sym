@@ -114,24 +114,19 @@ Var=B00_EPB1_Thr_St unsigned 0,2 /e:Enum_EPB_st
 Var=B02_EPB2_Thr_St unsigned 2,2 /e:Enum_EPB_st
 Var=B04_EPB3_Thr_St unsigned 4,2 /e:Enum_EPB_st
 Var=B06_EPB4_Thr_St unsigned 6,2 /e:Enum_EPB_st
-Var=B08_Brake1_Wk_Md_St signed 8,2
-Var=B10_Brake2_Wk_Md_St signed 10,2
-Var=B12_Brake3_Wk_Md_St signed 12,2
-Var=B14_Brake4_Wk_Md_St signed 14,2
-Var=B16_Brake1_Thr_St unsigned 16,10 /u:Mpa /max:102.3
-Var=B26_Brake2_Thr_St unsigned 26,10 /u:Mpa /max:102.3
-Var=B36_Brake3_Thr_St unsigned 36,10 /u:Mpa /max:102.3
-Var=B46_Brake4_Thr_St unsigned 46,10 /u:Mpa /max:102.3
+Var=B08_Brake1_Thr_St unsigned 8,12
+Var=B20_Brake2_Thr_St unsigned 20,12
+Var=B32_Brake3_Thr_St unsigned 32,12
+Var=B44_Brake4_Thr_St unsigned 44,12
 
 [VCU_BAT_ST]
 ID=13Ah
 Len=8
 CycleTime=10
-Var=B00_Bat_SoC unsigned 0,16 /f:0.1
-Var=B16_Bat_Voltage signed 16,16 /f:0.01 /min:0
-Var=B32_Bat_Current signed 32,16 /f:0.1 /min:-3276.7 /max:3276.7
-Var=B48_Bat_SoC_Valid unsigned 48,1
-Var=B49_Bat_Voltage_Valid unsigned 49,1
+Var=B00_HV_BAT_SOC unsigned 0,16 /f:0.1
+Var=B16_HV_BAT_VOL signed 16,16 /f:0.01 /min:0
+Var=B32_HV_BAT_CURR signed 32,16 /f:0.1 /min:-3276.7 /max:3276.7
+Var=B48_LV_BAT_VOL unsigned 48,16 /f:0.01 /max:1
 
 [VCU_IMU_ST1]
 ID=13Bh
