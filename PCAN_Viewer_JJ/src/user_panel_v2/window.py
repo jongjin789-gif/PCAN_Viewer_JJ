@@ -49,6 +49,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .config_dialog import WidgetConfigDialog, minimum_tool_spans, tab_names
+from .rx_grid import RxGridControl
 from .sequence import SequenceControl, validate_steps
 from .mode_security import verify_edit_password, verify_communication_password
 from .system_log import SystemLog
@@ -102,6 +103,25 @@ class FittingLabel(QLabel):
             if display_text != self._full_text or font.pixelSize() < self._base_pixel_size
             else ""
         )
+
+
+class FittingProgressBar(QProgressBar):
+    def setFormat(self, text):
+        super().setFormat(text)
+        self.setToolTip(text)
+        self._fit_text()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_text()
+
+    def _fit_text(self):
+        font = self.font()
+        for size in range(12, 7, -1):
+            font.setPixelSize(size)
+            if QFontMetrics(font).horizontalAdvance(self.text()) <= max(1, self.contentsRect().width() - 8):
+                break
+        self.setFont(font)
 
 
 class FittingGroupBox(QGroupBox):
@@ -211,6 +231,8 @@ class UserPanelWindow(QWidget):
         self.selected_widget_id = None
         self.selected_widget_ids = set()
         self._tool_clipboard = []
+        self._tool_clipboard_is_cut = False
+        self._tool_clipboard_tabs = {}
         self._paste_offset = 0
         self._ctrl_drag_copy = False
         self._ctrl_click_selected = False
@@ -525,6 +547,8 @@ class UserPanelWindow(QWidget):
         self._cancel_draw_mode(refresh=False)
         self._load_panel_data(dict(grid=dict(rows=36, cols=36, cell_size=16)))
         self._tool_clipboard.clear()
+        self._tool_clipboard_is_cut = False
+        self._tool_clipboard_tabs.clear()
         self._packet_clipboard = []
         self._paste_offset = 0
         self._paused_packets.clear()
@@ -585,6 +609,8 @@ class UserPanelWindow(QWidget):
             self.active_page_id = 'default'
             self._sync_page_tabs()
             self._tool_clipboard.clear()
+            self._tool_clipboard_is_cut = False
+            self._tool_clipboard_tabs.clear()
         self.rebuild_grid()
         self.log_system(f'클리어 완료: {scope}')
         session = getattr(self.main_window, 'session', None)
@@ -673,6 +699,15 @@ class UserPanelWindow(QWidget):
         self.act_redo.triggered.connect(self.redo_edit)
         menu_edit.addAction(self.act_undo)
         menu_edit.addAction(self.act_redo)
+        menu_edit.addSeparator()
+        self.act_cut = QAction('Cut\tCtrl+X', self)
+        self.act_copy = QAction('Copy\tCtrl+C', self)
+        self.act_paste = QAction('Paste\tCtrl+V', self)
+        for action, callback in ((self.act_cut, self.cut_selected_tools),
+                                 (self.act_copy, self.copy_selected_tools),
+                                 (self.act_paste, self.paste_tools)):
+            action.triggered.connect(callback)
+            menu_edit.addAction(action)
         menu_draw = self.menu_bar.addMenu("Draw")
         menu_arrange = self.menu_bar.addMenu("Arrange")
         menu_tools = self.menu_bar.addMenu("Tools")
@@ -742,6 +777,9 @@ class UserPanelWindow(QWidget):
         self.act_sim_auto.toggled.connect(self._toggle_auto_sim)
 
         self._edit_mode_actions = [
+            self.act_cut,
+            self.act_copy,
+            self.act_paste,
             *self.clear_buttons.values(),
             self.btn_add_tx,
             self.btn_add_rx,
@@ -787,7 +825,8 @@ class UserPanelWindow(QWidget):
         _add_shortcut("Shift+Right", lambda: self.resize_selected_span(1, 0))
         _add_shortcut(Qt.Key_Delete, self.delete_selected_widget)
         for host in (self.canvas, self.list_tools):
-            for key, callback in [('Ctrl+C', self.copy_selected_tools), ('Ctrl+V', self.paste_tools)]:
+            for key, callback in [('Ctrl+X', self.cut_selected_tools),
+                                  ('Ctrl+C', self.copy_selected_tools), ('Ctrl+V', self.paste_tools)]:
                 shortcut = QShortcut(QKeySequence(key), host)
                 shortcut.setContext(Qt.WidgetWithChildrenShortcut)
                 shortcut.activated.connect(callback)
@@ -883,15 +922,22 @@ class UserPanelWindow(QWidget):
         self._sync_page_tabs()
         self.rebuild_grid()
 
-    def _copy_tool_snapshot(self):
+    def _selected_tool_tree_ids(self):
         ids = {cfg['id'] for cfg in self.selected_configs()}
-        # Include children of copied groups once, even if also selected explicitly.
+        # Include every nested group/tab child once, including inactive tabs.
         while True:
             expanded = ids | {cfg['id'] for cfg in self.widgets_config if cfg.get('parent_id') in ids}
             if expanded == ids:
-                break
+                return ids
             ids = expanded
+
+    def _copy_tool_snapshot(self):
+        ids = self._selected_tool_tree_ids()
         return copy.deepcopy([cfg for cfg in self.widgets_config if cfg['id'] in ids])
+
+    def _tool_tab_indices(self, snapshot):
+        return {cfg['id']: self.widget_controls[cfg['id']].currentIndex()
+                for cfg in snapshot if isinstance(self.widget_controls.get(cfg['id']), QTabWidget)}
 
     def copy_selected_tools(self):
         if self.mode != 'edit':
@@ -899,19 +945,51 @@ class UserPanelWindow(QWidget):
         snapshot = self._copy_tool_snapshot()
         if snapshot:
             self._tool_clipboard = snapshot
+            self._tool_clipboard_is_cut = False
+            self._tool_clipboard_tabs = self._tool_tab_indices(snapshot)
             self._paste_offset = 0
+
+    def cut_selected_tools(self):
+        if self.mode != 'edit':
+            return
+        snapshot = self._copy_tool_snapshot()
+        if not snapshot:
+            return
+        self._tool_clipboard = snapshot
+        self._tool_clipboard_is_cut = True
+        self._tool_clipboard_tabs = self._tool_tab_indices(snapshot)
+        self._paste_offset = 0
+        ids = {cfg['id'] for cfg in snapshot}
+        self.widgets_config = [cfg for cfg in self.widgets_config if cfg['id'] not in ids]
+        self.selected_widget_id = None
+        self.selected_widget_ids.clear()
+        self.rebuild_grid()
 
     def paste_tools(self):
         if self.mode != 'edit' or not self._tool_clipboard:
             return
+        if self._tool_clipboard_is_cut:
+            self._duplicate_tools(self._tool_clipboard, 0, 0, move=True,
+                                  tab_indices=self._tool_clipboard_tabs)
+            self._tool_clipboard = []
+            self._tool_clipboard_is_cut = False
+            self._tool_clipboard_tabs.clear()
+            self._paste_offset = 0
+            return
         self._paste_offset += 1
-        self._duplicate_tools(self._tool_clipboard, self._paste_offset, self._paste_offset)
+        self._duplicate_tools(self._tool_clipboard, self._paste_offset, self._paste_offset,
+                              tab_indices=self._tool_clipboard_tabs)
 
-    def _duplicate_tools(self, snapshot, row_delta, col_delta):
+    def _duplicate_tools(self, snapshot, row_delta, col_delta, *, move=False, tab_indices=None):
         if self.mode != 'edit' or not snapshot:
             return
+        if tab_indices is None:
+            tab_indices = self._tool_tab_indices(snapshot)
         clones = copy.deepcopy(snapshot)
-        mapping = {cfg['id']: str(uuid.uuid4()) for cfg in clones}
+        existing_ids = {cfg['id'] for cfg in self.widgets_config}
+        # Undo may have restored the cut source. Paste a copy in that case.
+        move = move and existing_ids.isdisjoint(cfg['id'] for cfg in clones)
+        mapping = {cfg['id']: cfg['id'] if move else str(uuid.uuid4()) for cfg in clones}
         roots = [cfg for cfg in clones if cfg.get('parent_id') not in mapping]
         # One shared offset preserves the selected tools' relative positions.
         def bounded_delta(key, span, limit, wanted):
@@ -923,13 +1001,13 @@ class UserPanelWindow(QWidget):
         dr = bounded_delta('row', 'row_span', self.grid_rows, row_delta)
         dc = bounded_delta('col', 'col_span', self.grid_cols, col_delta)
         z = self._next_z()
-        existing_ids = {cfg['id'] for cfg in self.widgets_config}
         for index, cfg in enumerate(clones):
             original_id = cfg['id']
             parent = cfg.get('parent_id')
             cfg['id'] = mapping[original_id]
             cfg['page_id'] = self.active_page_id
-            cfg['title'] = cfg.get('title', 'Widget') + ' (복사)'
+            if not move:
+                cfg['title'] = cfg.get('title', 'Widget') + ' (복사)'
             cfg['z_index'] = z + index
             if parent in mapping:
                 cfg['parent_id'] = mapping[parent]
@@ -941,6 +1019,10 @@ class UserPanelWindow(QWidget):
         self.selected_widget_ids = {cfg['id'] for cfg in clones}
         self.selected_widget_id = clones[0]['id']
         self.rebuild_grid()
+        for original_id, index in tab_indices.items():
+            control = self.widget_controls.get(mapping.get(original_id))
+            if isinstance(control, QTabWidget):
+                control.setCurrentIndex(max(0, min(control.count() - 1, index)))
         self.properties.refresh(force=True)
         self.canvas.setFocus()
 
@@ -1514,14 +1596,14 @@ class UserPanelWindow(QWidget):
         self.selected_widget_ids = ids
         return [c for c in self.widgets_config if c["id"] in ids]
 
-    def _minimum_tool_row_span(self, widget_type):
+    def _minimum_tool_row_span(self, widget_type, config=None):
         return minimum_tool_spans(
-            widget_type, self.grid_cell_size, self.grid_rows, self.grid_cols
+            widget_type, self.grid_cell_size, self.grid_rows, self.grid_cols, config, self.db_messages
         )[0]
 
-    def _minimum_tool_col_span(self, widget_type):
+    def _minimum_tool_col_span(self, widget_type, config=None):
         return minimum_tool_spans(
-            widget_type, self.grid_cell_size, self.grid_rows, self.grid_cols
+            widget_type, self.grid_cell_size, self.grid_rows, self.grid_cols, config, self.db_messages
         )[1]
 
     def _normalize_config(self, cfg):
@@ -1580,8 +1662,8 @@ class UserPanelWindow(QWidget):
             cfg["parent_id"] = None
 
         wtype = cfg.get("widget_type", "label")
-        min_row_span = self._minimum_tool_row_span(wtype)
-        min_col_span = self._minimum_tool_col_span(wtype)
+        min_row_span = self._minimum_tool_row_span(wtype, cfg)
+        min_col_span = self._minimum_tool_col_span(wtype, cfg)
 
         cfg["row"] = max(0, min(self.grid_rows - 1, int(cfg.get("row", 0))))
         cfg["col"] = max(0, min(self.grid_cols - 1, int(cfg.get("col", 0))))
@@ -1777,8 +1859,8 @@ class UserPanelWindow(QWidget):
 
             # 선택된 위젯이 있을 경우: 위젯 타입에 맞는 최소 크기 제약을 적용합니다.
             wtype = cfg.get("widget_type")
-            min_row_span = self._minimum_tool_row_span(wtype)
-            min_col_span = self._minimum_tool_col_span(wtype)
+            min_row_span = self._minimum_tool_row_span(wtype, cfg)
+            min_col_span = self._minimum_tool_col_span(wtype, cfg)
 
             self.spin_sel_row_span.setRange(
                 min_row_span,
@@ -1803,6 +1885,9 @@ class UserPanelWindow(QWidget):
 
         menu = QMenu(self)
         act_edit = menu.addAction("Edit")
+        menu.addAction(self.act_cut)
+        menu.addAction(self.act_copy)
+        menu.addAction(self.act_paste)
         act_delete = menu.addAction("Delete")
         menu.addSeparator()
         act_front = menu.addAction("Bring Front")
@@ -1922,7 +2007,7 @@ class UserPanelWindow(QWidget):
 
             # group_box와 tab_container는 자체적으로 제목을 표시하므로,
             # 중복되는 외부 라벨을 생성하지 않습니다.
-            if wtype not in ("group_box", "tab_container", "slider"):
+            if wtype not in ("group_box", "tab_container", "slider", "grid_view"):
                 behavior = str(cfg.get("behavior", "none")).upper()
                 title = FittingLabel(f"[{behavior}] {cfg.get('title', 'Widget')}")
                 title.setProperty("panelTitle", True)
@@ -1945,6 +2030,8 @@ class UserPanelWindow(QWidget):
                 ctrl.setCurrentIndex(max(0, min(ctrl.count() - 1, index)))
             if wtype == "slider":
                 title_widget_for_binding = ctrl.findChild(QLabel, "slider_title")
+            elif wtype == 'grid_view':
+                title_widget_for_binding = ctrl.title_label
             # Stretch factor 1 allows the control to expand and fill available vertical space.
             frame_layout.addWidget(ctrl, 1)
 
@@ -2132,8 +2219,8 @@ class UserPanelWindow(QWidget):
                     c_start = int(cfg.get("col", 0))
 
                     wtype = cfg.get("widget_type")
-                    min_row_span = self._minimum_tool_row_span(wtype)
-                    min_col_span = self._minimum_tool_col_span(wtype)
+                    min_row_span = self._minimum_tool_row_span(wtype, cfg)
+                    min_col_span = self._minimum_tool_col_span(wtype, cfg)
                     cfg["row_span"] = (
                         min_row_span if wtype == "slider"
                         else max(min_row_span, r_end - r_start + 1)
@@ -2202,6 +2289,15 @@ class UserPanelWindow(QWidget):
         if style_name == "dot":
             return "dotted"
         return "solid"
+
+    def _open_grid_graph(self, cfg):
+        entries = cfg.get('binding', {}).get('grid_signals', [])
+        try:
+            if not hasattr(self.main_window, 'open_realtime_graph'):
+                raise ValueError('실시간 그래프를 열 수 있는 메인창이 필요합니다.')
+            return self.main_window.open_realtime_graph(entries)
+        except ValueError as exc:
+            QMessageBox.warning(self, '그리드 실시간 그래프', str(exc))
 
     def _create_runtime_widget(self, cfg):
         wtype = cfg.get("widget_type", "label")
@@ -2419,11 +2515,15 @@ class UserPanelWindow(QWidget):
                 spin.valueChanged.connect(lambda v: self._emit_tx(cfg, float(v)))
             return spin, None
 
+        if wtype == 'grid_view':
+            return RxGridControl(cfg, self.db_messages, lambda: self._open_grid_graph(cfg)), None
+
         if wtype == "progress":
-            bar = QProgressBar()
-            bar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+            bar = FittingProgressBar()
+            bar.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
             bar.setRange(0, 1000)
             bar.setValue(0)
+            bar.setFormat(self._format_progress_text(binding, None, 0))
             return bar, None
 
         if wtype == "status_lamp":
@@ -2514,6 +2614,9 @@ class UserPanelWindow(QWidget):
             col = int(cfg.get("col", 0))
             row_span = min(int(row_or_span), self.grid_rows - row)
             col_span = min(int(col_or_span), self.grid_cols - col)
+            if cfg.get('widget_type') == 'grid_view':
+                row_span = max(row_span, self._minimum_tool_row_span('grid_view', cfg))
+                col_span = max(col_span, self._minimum_tool_col_span('grid_view', cfg))
         else:
             row_span = max(1, int(cfg.get("row_span", 1)))
             col_span = max(1, int(cfg.get("col_span", 1)))
@@ -2631,8 +2734,8 @@ class UserPanelWindow(QWidget):
             return
 
         wtype = cfg.get("widget_type")
-        min_row_span = self._minimum_tool_row_span(wtype)
-        min_col_span = self._minimum_tool_col_span(wtype)
+        min_row_span = self._minimum_tool_row_span(wtype, cfg)
+        min_col_span = self._minimum_tool_col_span(wtype, cfg)
 
         col_span = int(cfg.get("col_span", 1)) + int(dcol_span)
         row_span = (
@@ -2989,6 +3092,39 @@ class UserPanelWindow(QWidget):
         text = f"{num:.3f}".rstrip("0").rstrip(".")
         return text if text else "0"
 
+    def _format_rx_label(self, binding, value, raw_value=None, received_unit=None):
+        signal = matching_signal(self.db_messages, binding, require_name=True)
+        choice = None
+        if signal is not None and signal.choices:
+            if raw_value is None:
+                # Simulator/signal-only callbacks supply physical values.
+                scale = float(binding.get('scale', 1))
+                if scale:
+                    candidate = (value - float(binding.get('offset', 0))) / scale
+                    if math.isfinite(candidate) and math.isclose(candidate, round(candidate), rel_tol=0, abs_tol=1e-7):
+                        raw_value = round(candidate)
+            if raw_value is not None:
+                choice = signal.choices.get(raw_value)
+        text = str(choice) if choice is not None else self._format_display_value(value)
+        unit = binding.get('unit') or (signal.unit if signal is not None else None) or received_unit
+        return f'{text} {unit}' if unit else text
+
+    def _format_progress_text(self, binding, value, percent):
+        mode = binding.get('progress_text_mode', 'percent')
+        if mode not in ('value', 'both'):
+            return f'{percent}%'
+        if value is None:
+            actual = '-'
+        else:
+            decimals = 6 if binding.get('value_precision_decimals') == 6 else 3
+            actual = f'{value:.{decimals}f}'.rstrip('0').rstrip('.')
+            if actual in ('', '-0'):
+                actual = '0'
+            unit = binding.get('unit', '')
+            if unit:
+                actual += f' {unit}'
+        return f'{percent}% | {actual}' if mode == 'both' else actual
+
     def _eval_condition(self, value, op, a, b):
         if op == "gt":
             return value > a
@@ -3016,6 +3152,11 @@ class UserPanelWindow(QWidget):
         for cfg in self.widgets_config:
             if cfg.get("behavior") != "rx":
                 continue
+            if cfg.get('widget_type') == 'grid_view':
+                control = self.widget_controls.get(cfg['id'])
+                if self.mode != 'edit' and isinstance(control, RxGridControl):
+                    control.update_message(self.db_messages, bus, can_id, data_bytes)
+                continue
             binding = cfg.get("binding", {})
             if int(binding.get("bus", -1)) != int(bus):
                 continue
@@ -3026,7 +3167,7 @@ class UserPanelWindow(QWidget):
             if raw is None:
                 continue
             phys = raw * float(binding.get("scale", 1.0)) + float(binding.get("offset", 0.0))
-            self._update_widget_value(cfg, phys)
+            self._update_widget_value(cfg, phys, raw_value=raw)
 
     def on_signal_update(self, bus, sig_name, value, unit, ts):
         self.latest_value_by_signal[(bus, sig_name)] = value
@@ -3034,11 +3175,16 @@ class UserPanelWindow(QWidget):
         for cfg in self.widgets_config:
             if cfg.get("behavior") != "rx":
                 continue
+            if cfg.get('widget_type') == 'grid_view':
+                continue  # The message decoder distinguishes identical names on different IDs.
             binding = cfg.get("binding", {})
             if int(binding.get("bus", -1)) != int(bus):
                 continue
             if binding.get("signal_name") != sig_name:
                 continue
+            if (cfg.get('widget_type') == 'label'
+                    and (int(bus), int(binding.get('can_id', 0))) in self.latest_raw_by_msg):
+                continue  # Preserve the label decoded from its exact frame and RAW value.
             signal = matching_signal(self.db_messages, binding)
             if signal is None:
                 continue
@@ -3046,9 +3192,9 @@ class UserPanelWindow(QWidget):
                     or float(binding.get("offset", 0)) != float(signal.offset)
                     or bool(binding.get("signed", False)) != bool(signal.is_signed)):
                 continue
-            self._update_widget_value(cfg, value)
+            self._update_widget_value(cfg, value, received_unit=unit)
 
-    def _update_widget_value(self, cfg, value, force=False):
+    def _update_widget_value(self, cfg, value, force=False, *, raw_value=None, received_unit=None):
         if self.mode == "edit" and not force:
             return
 
@@ -3069,10 +3215,15 @@ class UserPanelWindow(QWidget):
         except Exception:
             return
 
+        if wtype == 'grid_view' and isinstance(ctrl, RxGridControl):
+            ctrl.simulate_value(v)
+            return
+
         if wtype == "progress":
             ratio = 0.0 if max_v == min_v else (v - min_v) / (max_v - min_v)
             ratio = min(1.0, max(0.0, ratio))
             ctrl.setValue(int(ratio * 1000.0))
+            ctrl.setFormat(self._format_progress_text(binding, v, ctrl.value() // 10))
             return
 
         if wtype == "slider":
@@ -3135,7 +3286,7 @@ class UserPanelWindow(QWidget):
             return
 
         if wtype == "label":
-            ctrl.setText(self._format_display_value(v))
+            ctrl.setText(self._format_rx_label(binding, v, raw_value, received_unit))
             return
 
     def _extract_raw_value(self, payload, binding):

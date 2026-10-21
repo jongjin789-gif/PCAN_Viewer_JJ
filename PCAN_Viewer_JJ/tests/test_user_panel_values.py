@@ -5,6 +5,8 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
+from cantools.database.can import Message, Signal
+from cantools.database.conversion import BaseConversion
 
 from src.user_panel_v2.config_dialog import WidgetConfigDialog
 from src.user_panel_v2.window import UserPanelWindow
@@ -14,6 +16,59 @@ class UserPanelValuesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def rx_panel(self, binding, messages=None):
+        panel = UserPanelWindow(SimpleNamespace(), messages or {})
+        self.addCleanup(panel.deleteLater)
+        self.addCleanup(panel.close)
+        config = dict(id='label', title='State', widget_type='label', behavior='rx',
+                      row=0, col=0, row_span=3, col_span=8, binding=binding)
+        panel._load_panel_data(dict(widgets=[config]))
+        panel.set_mode('standby')
+        return panel
+
+    def test_rx_label_matches_signed_raw_enum_and_appends_dbc_unit(self):
+        for byte_order, start in (('little_endian', 0), ('big_endian', 7)):
+            with self.subTest(byte_order=byte_order):
+                signal = Signal('State', start, 16, byte_order=byte_order, is_signed=True, unit='V',
+                                conversion=BaseConversion.factory(scale=0.5, offset=10,
+                                    choices={2: 'Run', -2: 'Reverse', 11: 'WrongPhysicalEnum', 10: 'Other'}))
+                message = Message(0x130, 'Status', 2, [signal])
+                binding = dict(bus=1, can_id=0x130, signal_name='State', dlc=2, start_bit=start,
+                               bit_length=16, byte_order=byte_order, signed=True, scale=0.5, offset=10)
+                panel = self.rx_panel(binding, {1: {0x130: message}})
+                for raw, expected in ((2, 'Run V'), (-2, 'Reverse V'), (0, '10 V'), (3, '11.5 V')):
+                    panel.on_message_update(1, 0x130, message.encode({'State': raw}, scaling=False), 0)
+                    self.assertEqual(panel.widget_controls['label']._full_text, expected)
+                    panel.on_signal_update(1, 'State', raw * 0.5 + 10, 'V', 0)
+                    self.assertEqual(panel.widget_controls['label']._full_text, expected)
+
+    def test_rx_label_keeps_exact_large_raw_enum_and_omits_absent_unit(self):
+        raw = (1 << 60) + 1
+        signal = Signal('State', 0, 64, conversion=BaseConversion.factory(
+            scale=0.5, offset=10, choices={raw: 'ExactRaw'}))
+        message = Message(0x130, 'Status', 8, [signal])
+        binding = dict(bus=1, can_id=0x130, signal_name='State', dlc=8, start_bit=0,
+                       bit_length=64, scale=0.5, offset=10)
+        panel = self.rx_panel(binding, {1: {0x130: message}})
+        panel.on_message_update(1, 0x130, message.encode({'State': raw}, scaling=False), 0)
+        panel.on_signal_update(1, 'State', raw * 0.5 + 10, '', 0)
+        self.assertEqual(panel.widget_controls['label']._full_text, 'ExactRaw')
+
+    def test_rx_label_manual_unit_and_signal_only_enum_updates(self):
+        panel = self.rx_panel(dict(bus=1, can_id=0x130, dlc=1, start_bit=0,
+                                   bit_length=8, scale=0.5, offset=-10, unit='A'))
+        panel.on_message_update(1, 0x130, bytes([25]), 0)
+        self.assertEqual(panel.widget_controls['label']._full_text, '2.5 A')
+        signal = Signal('State', 0, 8, unit='V', conversion=BaseConversion.factory(
+            scale=0.1, offset=0, choices={12: 'Ready'}))
+        message = Message(0x131, 'Status', 1, [signal])
+        other = self.rx_panel(dict(bus=1, can_id=0x131, signal_name='State', dlc=1, start_bit=0,
+                                  bit_length=8, scale=0.1, offset=0), {1: {0x131: message}})
+        other.on_signal_update(1, 'State', 1.2, 'V', 0)
+        self.assertEqual(other.widget_controls['label']._full_text, 'Ready V')
+        other._update_widget_value(other.widgets_config[0], 1.2, force=True)
+        self.assertEqual(other.widget_controls['label']._full_text, 'Ready V')
 
     def test_configured_values_survive_accept_and_runtime_clicks(self):
         for widget_type in ("button", "toggle"):

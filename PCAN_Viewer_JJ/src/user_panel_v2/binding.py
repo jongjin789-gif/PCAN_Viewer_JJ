@@ -78,6 +78,16 @@ def pack_value(payload, binding, value):
 
 
 def validate_config(cfg):
+    if cfg.get('widget_type') == 'grid_view':
+        from .rx_grid import validate_grid_signals, GRID_COLUMNS, DEFAULT_GRID_COLUMNS
+        if cfg.get('behavior') != 'rx':
+            raise ValueError('그리드 뷰는 수신 도구입니다.')
+        validate_grid_signals(cfg.get('binding', {}).get('grid_signals', []))
+        columns = cfg.get('binding', {}).get('grid_columns', DEFAULT_GRID_COLUMNS)
+        if (not isinstance(columns, list) or any(not isinstance(key, str) or key not in dict(GRID_COLUMNS) for key in columns)
+                or len(set(columns)) != len(columns)):
+            raise ValueError('그리드 표시 열을 확인하세요. 값은 항상 표시됩니다.')
+        return
     if cfg.get("behavior") not in ("tx", "rx") or cfg.get("widget_type") == "sequence":
         return
     from .commands import command_bindings

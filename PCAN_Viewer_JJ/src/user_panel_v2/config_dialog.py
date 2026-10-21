@@ -33,7 +33,7 @@ def tab_names(config):
     return [str(name) for name in names] if isinstance(names, list) and names else ['Tab 1', 'Tab 2']
 
 
-def minimum_tool_spans(widget_type, cell_size, grid_rows, grid_cols):
+def minimum_tool_spans(widget_type, cell_size, grid_rows, grid_cols, config=None, db_messages=None):
     if widget_type == "shape_line":
         return 1, 1
     if widget_type == "slider":
@@ -42,12 +42,15 @@ def minimum_tool_spans(widget_type, cell_size, grid_rows, grid_cols):
     elif widget_type == "sequence":
         min_row_pixels, min_col_pixels = 112, 192
         min_rows, min_cols = 4, 6
-    elif widget_type == "spinbox":
-        min_row_pixels, min_col_pixels = 48, 96
-        min_rows, min_cols = 2, 4
+    elif widget_type == 'grid_view':
+        from .rx_grid import grid_minimum_size
+        size = grid_minimum_size(config or {}, db_messages or {})
+        margin = 2 * max(2, min(6, int(cell_size) // 4))
+        min_row_pixels, min_col_pixels = size.height() + margin, size.width() + margin
+        min_rows, min_cols = 3, 6
     else:
-        min_row_pixels, min_col_pixels = 48, 64
-        min_rows, min_cols = 2, 4
+        min_row_pixels, min_col_pixels = 48, 96
+        min_rows, min_cols = 3, 6
     cell_size = max(1, int(cell_size))
     row_span = min(grid_rows, max(min_rows, (min_row_pixels + cell_size - 1) // cell_size))
     col_span = min(grid_cols, max(min_cols, (min_col_pixels + cell_size - 1) // cell_size))
@@ -94,6 +97,7 @@ class WidgetConfigDialog(QDialog):
         self._enum_entries = []
         self.sequence_steps = []
         self.sequence_failure_steps = []
+        self.grid_signals = []
 
         self._build_ui()
         self._load_db_messages()
@@ -129,6 +133,22 @@ class WidgetConfigDialog(QDialog):
         self.grp_value = grp_value
         self.grp_rx = grp_rx
         self.grp_shape = grp_shape
+        self.grp_grid = QGroupBox('그리드 뷰 신호')
+        grid_layout = QVBoxLayout(self.grp_grid)
+        self.btn_grid_signals = QPushButton('DBC 트리에서 신호 선택…')
+        self.btn_grid_signals.clicked.connect(self._edit_grid_signals)
+        grid_layout.addWidget(self.btn_grid_signals)
+        self.label_grid_signals = QLabel('선택된 신호: 0개 (선택 순서대로 표시)')
+        self.label_grid_signals.setWordWrap(True)
+        grid_layout.addWidget(self.label_grid_signals)
+        from .rx_grid import GRID_COLUMNS, DEFAULT_GRID_COLUMNS
+        grid_layout.addWidget(QLabel('표시할 열 (값은 항상 표시)'))
+        self.grid_column_checks = {}
+        for key, text in GRID_COLUMNS:
+            check = QCheckBox(text)
+            check.setChecked(key in DEFAULT_GRID_COLUMNS)
+            grid_layout.addWidget(check)
+            self.grid_column_checks[key] = check
 
         self.combo_widget_type = QComboBox()
         self.combo_widget_type.addItems([])
@@ -148,10 +168,10 @@ class WidgetConfigDialog(QDialog):
         self.spin_col.setRange(0, self.grid_cols - 1)
         self.spin_row_span = QSpinBox()
         self.spin_row_span.setRange(1, self.grid_rows)
-        self.spin_row_span.setValue(2)
+        self.spin_row_span.setValue(3)
         self.spin_col_span = QSpinBox()
         self.spin_col_span.setRange(1, self.grid_cols)
-        self.spin_col_span.setValue(4)
+        self.spin_col_span.setValue(6)
         form_tool.addRow("Row", self.spin_row)
         form_tool.addRow("Col", self.spin_col)
         form_tool.addRow("Row Span", self.spin_row_span)
@@ -279,6 +299,13 @@ class WidgetConfigDialog(QDialog):
         self.spin_max.setValue(100.0)
         form_value.addRow("Min", self.spin_min)
         form_value.addRow("Max", self.spin_max)
+        self.combo_progress_display = QComboBox()
+        self.combo_progress_display.addItem('퍼센트', 'percent')
+        self.combo_progress_display.addItem('실제 값', 'value')
+        self.combo_progress_display.addItem('퍼센트 + 실제 값', 'both')
+        self.combo_progress_display.setToolTip(
+            '퍼센트는 Min~Max를 0~100%로 표시합니다. 실제 값은 스케일·오프셋을 적용한 수신값과 단위입니다.')
+        form_value.addRow('Progress 표시', self.combo_progress_display)
         self.combo_slider_mapping = QComboBox()
         self.combo_slider_mapping.addItem("값 그대로 적용 (Min~Max 제한)", "direct")
         self.combo_slider_mapping.addItem("백분율 적용", "percent")
@@ -345,9 +372,16 @@ class WidgetConfigDialog(QDialog):
         self.label_value_hint.setStyleSheet("color:#555;")
         form_value.addRow("Input Rule", self.label_value_hint)
 
+        lamp_conditions = [
+            ('X > A', 'gt'), ('X ≥ A', 'ge'),
+            ('X < A', 'lt'), ('X ≤ A', 'le'),
+            ('X = A', 'eq'), ('X ≠ A', 'ne'),
+            ('A ≤ X ≤ B', 'between'), ('X < A 또는 X > B', 'outside'),
+        ]
         self.combo_rx_on_op = QComboBox()
-        self.combo_rx_on_op.addItems(["gt", "ge", "lt", "le", "eq", "ne", "between", "outside"])
-        self.combo_rx_on_op.setCurrentText("ge")
+        for text, code in lamp_conditions:
+            self.combo_rx_on_op.addItem(text, code)
+        self.combo_rx_on_op.setCurrentIndex(self.combo_rx_on_op.findData('ge'))
         form_rx.addRow("Lamp ON Condition", self.combo_rx_on_op)
 
         self.spin_rx_on_a = QDoubleSpinBox()
@@ -362,8 +396,11 @@ class WidgetConfigDialog(QDialog):
         form_rx.addRow("Lamp ON B", self.spin_rx_on_b)
 
         self.combo_rx_off_op = QComboBox()
-        self.combo_rx_off_op.addItems(["gt", "ge", "lt", "le", "eq", "ne", "between", "outside"])
-        self.combo_rx_off_op.setCurrentText("lt")
+        for text, code in lamp_conditions:
+            self.combo_rx_off_op.addItem(text, code)
+        self.combo_rx_off_op.setCurrentIndex(self.combo_rx_off_op.findData('lt'))
+        for combo in (self.combo_rx_on_op, self.combo_rx_off_op):
+            combo.setToolTip('X: 수신값(스케일·오프셋 적용), A/B: 조건 설정값. 범위 조건에서는 A/B를 작은 값부터 정렬합니다.')
         form_rx.addRow("Lamp OFF Condition", self.combo_rx_off_op)
 
         self.spin_rx_off_a = QDoubleSpinBox()
@@ -422,6 +459,7 @@ class WidgetConfigDialog(QDialog):
         self._register_row(form_comm, self.combo_byte_order)
         self._register_row(form_comm, self.edit_unit)
 
+        self._register_row(form_value, self.combo_progress_display)
         self._register_row(form_value, self.spin_min)
         self._register_row(form_value, self.spin_max)
         self._register_row(form_value, self.combo_slider_mapping)
@@ -482,6 +520,7 @@ class WidgetConfigDialog(QDialog):
         form_wrap_lay.setSpacing(6)
         form_wrap_lay.addWidget(grp_tool)
         form_wrap_lay.addWidget(self.grp_tabs)
+        form_wrap_lay.addWidget(self.grp_grid)
         form_wrap_lay.addWidget(grp_comm)
         form_wrap_lay.addWidget(grp_value)
         self.grp_commands = QGroupBox("멀티 명령")
@@ -546,6 +585,7 @@ class WidgetConfigDialog(QDialog):
         root.addLayout(btns)
 
         watchers = [
+            self.combo_progress_display,
             self.combo_slider_mapping,
             self.combo_widget_type,
             self.combo_behavior,
@@ -568,6 +608,8 @@ class WidgetConfigDialog(QDialog):
         ]
         for w in watchers:
             w.currentIndexChanged.connect(self._on_any_changed)
+        for check in self.grid_column_checks.values():
+            check.toggled.connect(self._on_any_changed)
 
         value_watchers = [
             self.edit_title,
@@ -773,8 +815,16 @@ class WidgetConfigDialog(QDialog):
         if behavior == "tx":
             return ["button", "toggle", "slider", "spinbox", "sequence"]
         if behavior == "rx":
-            return ["progress", "label", "status_lamp"]
+            return ["progress", "label", "status_lamp", "grid_view"]
         return ["group_box", "tab_container", "shape_line", "shape_rect"]
+
+    def _edit_grid_signals(self):
+        from .rx_grid import GridSignalDialog
+        dialog = GridSignalDialog(self.db_messages, self.grid_signals, self)
+        if dialog.exec_() == dialog.Accepted:
+            self.grid_signals = dialog.selected_signals()
+            self.label_grid_signals.setText(f'선택된 신호: {len(self.grid_signals)}개 (선택 순서대로 표시)')
+            self._on_any_changed()
 
     def _edit_sequence(self):
         from .sequence_dialog import SequenceDialog
@@ -823,7 +873,10 @@ class WidgetConfigDialog(QDialog):
         # 위젯이 너무 작아져 레이아웃이 깨지는 현상을 방지하기 위해 최소 크기를 제한합니다.
         # 단, 한 줄 짜리 선(shape_line)은 예외적으로 1의 크기를 가질 수 있습니다.
         min_row_span, min_col_span = minimum_tool_spans(
-            wtype, self.grid_cell_size, self.grid_rows, self.grid_cols
+            wtype, self.grid_cell_size, self.grid_rows, self.grid_cols,
+            dict(title=self.edit_title.text(), binding=dict(grid_signals=self.grid_signals,
+                 grid_columns=[key for key, check in self.grid_column_checks.items() if check.isChecked()])),
+            self.db_messages,
         )
         self.spin_row_span.setMinimum(min_row_span)
         self.spin_row_span.setMaximum(
@@ -833,15 +886,17 @@ class WidgetConfigDialog(QDialog):
 
         is_shape = wtype in ("shape_line", "shape_rect")
         is_group_container = wtype in ("group_box", "tab_container")
+        is_grid = wtype == 'grid_view'
+        self.grp_grid.setVisible(is_grid)
         self.grp_tabs.setVisible(wtype == 'tab_container')
         self._set_row_visible(self.combo_parent_tab, self.combo_parent_tab.count() > 0)
         is_tx = behavior == "tx"
         is_rx = behavior == "rx"
         self.grp_commands.setVisible(self.allow_multi and is_tx and wtype in MULTI_TYPES)
 
-        self.grp_comm.setVisible(not is_shape and not is_group_container)
+        self.grp_comm.setVisible(not is_shape and not is_group_container and not is_grid)
         self.grp_shape.setVisible(is_shape)
-        self.grp_value.setVisible(not is_shape and not is_group_container)
+        self.grp_value.setVisible(not is_shape and not is_group_container and not is_grid)
         is_sequence = wtype == "sequence"
         self.btn_sequence.setVisible(is_sequence)
         if is_sequence:
@@ -868,6 +923,7 @@ class WidgetConfigDialog(QDialog):
         show_minmax = wtype in ("slider", "spinbox", "progress", "status_lamp", "label")
         self._set_row_visible(self.spin_min, show_minmax)
         self._set_row_visible(self.spin_max, show_minmax)
+        self._set_row_visible(self.combo_progress_display, is_rx and wtype == 'progress')
 
         self._set_row_visible(self.spin_resolution, is_tx and wtype in ("slider", "spinbox"))
         self._set_row_visible(self.spin_slider_initial, is_tx and wtype == "slider")
@@ -1035,6 +1091,7 @@ class WidgetConfigDialog(QDialog):
             "progress": "RX bar view",
             "label": "RX text value",
             "status_lamp": "RX condition-based ON/OFF",
+            "grid_view": "DBC 트리에서 선택한 순서대로 신호 값을 표시합니다. 제목 오른쪽 그래프 아이콘으로 실시간 그래프를 엽니다.",
             "group_box": "Visual grouping container",
             "tab_container": "Visual tab grouping container",
             "shape_line": "Simple line drawing",
@@ -1268,6 +1325,7 @@ class WidgetConfigDialog(QDialog):
                 "byte_order": self.combo_byte_order.currentData(),
                 "min": self._round_value(min_v),
                 "max": self._round_value(max_v),
+                "progress_text_mode": self.combo_progress_display.currentData(),
                 "tx_resolution": float(self.spin_resolution.value()),
                 "slider_mapping": self.combo_slider_mapping.currentData(),
                 "sequence_steps": copy.deepcopy(self.sequence_steps),
@@ -1277,10 +1335,10 @@ class WidgetConfigDialog(QDialog):
                 "tx_release_value": self._round_value(self._value_from_editor(self.spin_release_value, self.combo_release_enum)),
                 "tx_on_value": self._round_value(self._value_from_editor(self.spin_toggle_on_value, self.combo_toggle_on_enum)),
                 "tx_off_value": self._round_value(self._value_from_editor(self.spin_toggle_off_value, self.combo_toggle_off_enum)),
-                "rx_on_op": self.combo_rx_on_op.currentText(),
+                "rx_on_op": self.combo_rx_on_op.currentData(),
                 "rx_on_a": self._round_value(self.spin_rx_on_a.value()),
                 "rx_on_b": self._round_value(self.spin_rx_on_b.value()),
-                "rx_off_op": self.combo_rx_off_op.currentText(),
+                "rx_off_op": self.combo_rx_off_op.currentData(),
                 "rx_off_a": self._round_value(self.spin_rx_off_a.value()),
                 "rx_off_b": self._round_value(self.spin_rx_off_b.value()),
                 "shape_kind": self.combo_shape_kind.currentText(),
@@ -1295,6 +1353,10 @@ class WidgetConfigDialog(QDialog):
             },
         }
 
+        if config['widget_type'] == 'grid_view':
+            config['binding']['grid_signals'] = copy.deepcopy(self.grid_signals)
+            config['binding']['grid_columns'] = [key for key, check in self.grid_column_checks.items()
+                                                  if check.isChecked()]
         if config['widget_type'] == 'tab_container':
             config['tabs'] = [self.list_tabs.item(i).text() for i in range(self.list_tabs.count())]
         if self.combo_parent_tab.count():
@@ -1335,6 +1397,13 @@ class WidgetConfigDialog(QDialog):
         self.combo_widget_type.setCurrentText(config.get("widget_type", self.combo_widget_type.currentText()))
 
         binding = config.get("binding", {})
+        self.grid_signals = copy.deepcopy(binding.get('grid_signals', []))
+        from .rx_grid import DEFAULT_GRID_COLUMNS
+        for key, check in self.grid_column_checks.items():
+            check.setChecked(key in binding.get('grid_columns', DEFAULT_GRID_COLUMNS))
+        self.label_grid_signals.setText(f'선택된 신호: {len(self.grid_signals)}개 (선택 순서대로 표시)')
+        self.combo_progress_display.setCurrentIndex(max(0, self.combo_progress_display.findData(
+            binding.get('progress_text_mode', 'percent'))))
         self._dbc_manual_binding = binding.get('dbc_manual', False)
         self.sequence_steps = copy.deepcopy(binding.get("sequence_steps", []))
         self.sequence_failure_steps = copy.deepcopy(binding.get('sequence_failure_steps', []))
@@ -1375,10 +1444,12 @@ class WidgetConfigDialog(QDialog):
         self.spin_toggle_on_value.setValue(float(binding.get("tx_on_value", 1.0)))
         self.spin_toggle_off_value.setValue(float(binding.get("tx_off_value", 0.0)))
 
-        self.combo_rx_on_op.setCurrentText(str(binding.get("rx_on_op", "ge")))
+        on_index = self.combo_rx_on_op.findData(str(binding.get("rx_on_op", "ge")))
+        self.combo_rx_on_op.setCurrentIndex(on_index if on_index >= 0 else self.combo_rx_on_op.findData('ge'))
         self.spin_rx_on_a.setValue(float(binding.get("rx_on_a", 1.0)))
         self.spin_rx_on_b.setValue(float(binding.get("rx_on_b", 1.0)))
-        self.combo_rx_off_op.setCurrentText(str(binding.get("rx_off_op", "lt")))
+        off_index = self.combo_rx_off_op.findData(str(binding.get("rx_off_op", "lt")))
+        self.combo_rx_off_op.setCurrentIndex(off_index if off_index >= 0 else self.combo_rx_off_op.findData('lt'))
         self.spin_rx_off_a.setValue(float(binding.get("rx_off_a", 1.0)))
         self.spin_rx_off_b.setValue(float(binding.get("rx_off_b", 1.0)))
 

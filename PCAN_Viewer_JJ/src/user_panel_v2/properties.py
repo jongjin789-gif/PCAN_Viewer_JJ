@@ -17,6 +17,8 @@ from .commands import command_bindings
 class ToolProperties(QWidget):
     @staticmethod
     def bound_buses(cfg):
+        if cfg.get('widget_type') == 'grid_view':
+            return {entry['bus'] for entry in cfg.get('binding', {}).get('grid_signals', [])}
         if cfg.get("widget_type") == "sequence":
             binding = cfg.get('binding', {})
             return {int(s["packet"]["bus"]) for s in binding.get("sequence_steps", []) + binding.get('sequence_failure_steps', []) if s.get("packet")}
@@ -97,8 +99,9 @@ class ToolProperties(QWidget):
                 values = [c.get('binding', {}).get('packet_id') for c in configs if c.get('behavior') == 'tx']
                 field.setCurrentIndex(max(0, field.findData(values[0] if values else None)))
                 self.add_field(form, 'packet_id', 'TX 등록 패킷', field, len(set(values)) > 1)
-            self.checks['bus'].setVisible(any(c.get('behavior') == 'rx' for c in configs))
-            self.fields['bus'].setVisible(any(c.get('behavior') == 'rx' for c in configs))
+            show_bus = any(c.get('behavior') == 'rx' and c.get('widget_type') != 'grid_view' for c in configs)
+            self.checks['bus'].setVisible(show_bus)
+            self.fields['bus'].setVisible(show_bus)
             layout.addWidget(group)
         channel = QGroupBox("CAN BUS Speed")
         form = QFormLayout(channel)
@@ -185,7 +188,7 @@ class ToolProperties(QWidget):
                         if packet:
                             bind_packet(cfg.setdefault('binding', {}), packet)
                     continue
-                if key == 'bus' and cfg.get('behavior') != 'rx':
+                if key == 'bus' and (cfg.get('behavior') != 'rx' or cfg.get('widget_type') == 'grid_view'):
                     continue
                 if key in ("row", "col", "row_span", "col_span"):
                     cfg[key] = value

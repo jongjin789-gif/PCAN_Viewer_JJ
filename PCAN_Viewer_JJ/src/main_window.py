@@ -436,8 +436,8 @@ class UniversalCANMonitor(QMainWindow):
         self.tx_panel.toolbar.addWidget(self.btn_user_panel)
         
         split_view = QSplitter(Qt.Vertical)
-        split_view.addWidget(packet_section(tree_group, 'RX'))
-        split_view.addWidget(packet_section(self.tx_panel, 'TX'))
+        split_view.addWidget(packet_section(tree_group, 'RX', self.tree))
+        split_view.addWidget(packet_section(self.tx_panel, 'TX', self.tx_panel.tree))
         split_view.setSizes([400, 200]) # 상단 수신부와 하단 송신부의 초기 비율
         main_layout.addWidget(split_view, 1)  # stretch 인자를 1로 주어 가능한 많은 공간 할당
         split_view.setVisible(not self.viewer_only)
@@ -595,9 +595,23 @@ class UniversalCANMonitor(QMainWindow):
             QMessageBox.warning(self, "Warning", "그래프를 확인할 시그널을 트리 체크박스에서 1개 이상 선택해주세요.")
             return
             
+        return self._show_realtime_graph(selected_signals, bindings)
+
+    def open_realtime_graph(self, entries):
+        """Open panel-selected signals through the main graph routing/session path."""
+        bindings = {}
+        for entry in entries:
+            key, binding = self.session.bind_signal(entry['bus'], entry['can_id'], entry['signal_name'])
+            bindings[key] = binding
+        if not bindings:
+            raise ValueError('그래프로 표시할 신호를 선택하세요.')
+        return self._show_realtime_graph(list(bindings), bindings)
+
+    def _show_realtime_graph(self, selected_signals, bindings):
+        bound_signals = self.resolve_graph_bindings(bindings)
         graph = SignalGraphWindow(selected_signals, main_window=self)
         graph.signal_bindings = bindings
-        graph._bound_signals = self.resolve_graph_bindings(bindings)
+        graph._bound_signals = bound_signals
         update_realtime_labels(graph)
         
         # 이미 열려있는 그래프 창이 있다면, 가장 최근 창의 크기를 가져와서 똑같이 맞춰줌
@@ -607,6 +621,7 @@ class UniversalCANMonitor(QMainWindow):
             
         self.active_graphs.append(graph)
         graph.show()
+        return graph
         
     def handle_sync_toggle(self, graph_window, is_checked):
         """그래프 창의 Sync 체크 상태 변경을 처리하여 순서가 있는 리스트를 관리합니다."""

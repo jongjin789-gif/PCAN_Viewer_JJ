@@ -257,6 +257,7 @@ def token(path):
 | `min`, `max` | 도구 표시/조작 범위. 조작 가능한 도구는 max > min |
 | `unit` | 단위 문자열 |
 | `value_precision_decimals` | 표시 소수 자릿수. 3(기본) 또는 6(고정밀) |
+| `progress_text_mode` | RX progress 표시: `percent`(기본), `value`(실제 값과 단위), `both`(퍼센트와 실제 값). 퍼센트는 min~max 기준 0~100%, 실제 값은 scale/offset 적용 후 값 |
 | `tx_resolution` | 슬라이더/숫자입력 이동 간격. 양수 |
 | `tx_initial_value` | 슬라이더 초기/Home 값 |
 | `tx_press_value`, `tx_release_value` | 버튼 누름/놓음 값 |
@@ -275,8 +276,9 @@ def token(path):
 | `toggle` | `tx` | ON/OFF 전환. tx_on_value, tx_off_value |
 | `slider` | `tx` | 가로 슬라이더·값 입력·Set·Home. min/max/resolution/initial 필요 |
 | `spinbox` | `tx` | 숫자 입력/증감. min/max/tx_resolution 필요 |
-| `label` | `rx` | 수신 숫자와 단위 표시. 기본 모니터링 도구 |
+| `label` | `rx` | RAW 값에 해당하는 DBC Enum 이름 또는 팩터·옵셋 적용 숫자와 단위 표시 |
 | `progress` | `rx` | min/max 범위의 수신 막대 표시 |
+| `grid_view` | `rx` | `binding.grid_signals` 배열 순서대로 버스·심볼명·신호명·값 표시. 제목 오른쪽 아이콘으로 실시간 그래프 |
 | `status_lamp` | `rx` | 조건식에 따른 ON/OFF 표시 |
 | `sequence` | `tx` | sequence_steps와 sequence_failure_steps. 10절 참조 |
 | `group_box` | `none` | 제목 있는 그룹. 자식의 parent_id로 연결 |
@@ -285,6 +287,16 @@ def token(path):
 | `shape_rect` | `none` | 사각형, 선과 채움 설정 |
 
 별도 `scrollbar` 타입은 없다. 사용자가 “스크롤바로 값을 조절”하라고 하면 `slider`로 해석했음을 알린다. 단순 RX 표시에는 label/progress/status_lamp를 우선 사용한다.
+
+`grid_view`는 여러 DBC 신호를 한 도구에 표시한다. `binding.grid_signals`의 각 항목은
+`{"bus":1,"can_id":304,"symbol_name":"VCU_Status","signal_name":"Voltage","unit":"V"}`
+형식이며 배열 순서가 행·그래프 순서다. BUS/CAN ID/신호명 조합은 중복하지 않는다.
+각 항목의 선택 필드 `user_name`은 사용자 별칭이며 비어 있으면 신호명으로 표시한다.
+`binding.grid_columns`는 `bus`, `symbol_name`, `signal_name`, `user_name` 중 표시할 열의 배열이다.
+생략하면 기존 세 열을 사용하고 빈 배열이면 값만 표시한다. 값 열은 항상 마지막에 표시한다.
+열 너비는 글자 길이로 정하며 여유 너비는 값 열에 배정한다. 도구를 키우면 글자도 공간에 맞춰 확대한다.
+`symbol_name`과 `unit`은 저장된 설명이며, 실제 수신값은 해당 BUS/CAN ID의 현재 DBC 신호로 디코딩한다.
+선택은 속성창의 DBC 트리에서 편집하며, 이 도구에 단일 비트 바인딩을 만들어 여러 신호를 대신하지 않는다.
 
 램프는 다음 필드를 추가한다.
 
@@ -471,8 +483,9 @@ sequence_failure_steps는 기본적으로 빈 배열이다. 실패 시 전체 �
 | shape_line | 1 | 1 | 장식에 불필요하게 넓은 영역을 사용하지 않음 |
 | slider | 4 | 12 | 높이는 정규화 시 4로 고정, 폭은 20~36 정도 |
 | sequence | 7 | 12 | 로그를 위해 높이 12~18, 폭 30 이상 |
+| grid_view | 내용에 따라 계산(최소 3) | 내용에 따라 계산(최소 6) | 선택한 행 수·열·글자 길이와 제목 기준. 전체 그리드 상한을 넘으면 스크롤 |
 | spinbox | 3 | 6 | 숫자와 단위를 읽을 수 있는 폭 |
-| 그 외 | 3 | 4 | 버튼/숫자는 높이 4~6, 폭 10 이상 고려 |
+| 그 외 | 3 | 6 | 버튼/숫자는 높이 4~6, 폭 10 이상 고려 |
 
 작은 그리드에서는 최소 span이 rows/cols 상한으로 제한된다. 표를 만족하더라도 부모가 작으면 가독성을 보장하지 않는다.
 

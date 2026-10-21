@@ -1,5 +1,5 @@
 """A compact light theme matching the monitor's teal icon family."""
-from PyQt5.QtCore import Qt, QRectF
+from PyQt5.QtCore import Qt, QRectF, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor
 from PyQt5.QtWidgets import QWidget, QHBoxLayout
 
@@ -7,12 +7,21 @@ from PyQt5.QtWidgets import QWidget, QHBoxLayout
 class PacketDirectionStrip(QWidget):
     """A narrow rotated label confined to its packet section."""
 
+    double_clicked = pyqtSignal()
+
     def __init__(self, direction, parent=None):
         super().__init__(parent)
         self.direction = direction
         self.setFixedWidth(22)
         self.setToolTip('Receive packets' if direction == 'RX' else 'Transmit packets')
         self.setAccessibleName(self.toolTip())
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.double_clicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -30,12 +39,29 @@ class PacketDirectionStrip(QWidget):
                                 self.height(), self.width()), Qt.AlignCenter, self.direction)
 
 
-def packet_section(content, direction):
+def packet_section(content, direction, tree=None):
     section = QWidget()
     layout = QHBoxLayout(section)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(1)
-    layout.addWidget(PacketDirectionStrip(direction, section))
+    strip = PacketDirectionStrip(direction, section)
+    strip.setObjectName(f'{direction.lower()}DirectionStrip')
+    if tree is not None:
+        strip.setCursor(Qt.PointingHandCursor)
+        label = '수신부' if direction == 'RX' else '송신부'
+        strip.setToolTip(f'{label} 트리 전체 접기 / 펼치기 (더블클릭)')
+        strip.setAccessibleName(strip.toolTip())
+
+        def toggle_tree():
+            expanded = any(tree.topLevelItem(i).childCount() and tree.topLevelItem(i).isExpanded()
+                           for i in range(tree.topLevelItemCount()))
+            if expanded:
+                tree.collapseAll()
+            else:
+                tree.expandAll()
+
+        strip.double_clicked.connect(toggle_tree)
+    layout.addWidget(strip)
     layout.addWidget(content, 1)
     return section
 
