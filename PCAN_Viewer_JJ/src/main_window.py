@@ -14,10 +14,11 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QG
                              QTreeWidget, QSplitter, QMessageBox, QFileDialog, QTreeWidgetItemIterator, QInputDialog)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt5.QtGui import QFont, QIcon, QKeySequence
-from src.utils import get_resource_path, SortableTreeWidgetItem
+from src.utils import get_resource_path, ReceiveTreeWidgetItem
 from src.can_threads import CANReceiverThread
 from src.graph_realtime import SignalGraphWindow
 from src.graph_labels import update_realtime_labels
+from src.graph_lifecycle import close_graph_windows
 from src.record_window import RecordWindow
 from src.log_viewer import LogViewerWindow
 from src.tx_panel import TxPanel
@@ -74,8 +75,8 @@ class UniversalCANMonitor(QMainWindow):
         self._bus_log_windows = {}
         self.rx_threads = {b: None for b in BUS_IDS}
         self.db_messages = {b: {} for b in BUS_IDS} # {bus_num: {can_id: cantools.message.Message}}
-        self.signal_tree_items = {} # {(bus_num, signal_name): QTreeWidgetItem}
-        self.signal_choices = {} # {(bus_num, signal_name): choices} Enum 딕셔너리 정보
+        self.signal_tree_items = {} # {(bus_num, can_id, signal_name): QTreeWidgetItem}
+        self.signal_choices = {} # Legacy name-only graph fallback; RX uses its exact message definition.
         self.signal_display_decimals = {}
         self.msg_tree_items = {} # {(bus_num, can_id): QTreeWidgetItem}
         self.active_graphs = [] # [SignalGraphWindow, ...]
@@ -395,6 +396,11 @@ class UniversalCANMonitor(QMainWindow):
         btn_layout.addWidget(self.search_input)
         
         btn_layout.addStretch()
+
+        self.btn_close_graphs = QPushButton("Close Graphs")
+        decorate_button(self.btn_close_graphs, 'graph_close', '이 메인창에서 연 모든 실시간 그래프를 닫습니다.')
+        self.btn_close_graphs.clicked.connect(self.close_graphs)
+        btn_layout.addWidget(self.btn_close_graphs)
         
         self.btn_clear_data = QPushButton("Clear Data")
         decorate_button(self.btn_clear_data, 'view_clear', '수신 패킷 화면과 통계를 비웁니다.')
@@ -421,8 +427,7 @@ class UniversalCANMonitor(QMainWindow):
         self.tree.setColumnWidth(7, 100) # Cycle
         self.tree.setColumnWidth(8, 80)  # Count
         self.tree.setSortingEnabled(True)
-        self.tree.sortByColumn(2, Qt.AscendingOrder) # 1. CAN ID
-        self.tree.sortByColumn(0, Qt.AscendingOrder) # 2. Bus (Primary Sort Key)
+        self.tree.sortByColumn(0, Qt.AscendingOrder) # Bus, then numeric CAN ID within each bus.
         self.tree.itemChanged.connect(self.on_tree_item_changed)
         tree_layout.addWidget(self.tree)
         
@@ -435,10 +440,13 @@ class UniversalCANMonitor(QMainWindow):
         self.btn_user_panel.clicked.connect(self.open_user_panel)
         self.tx_panel.toolbar.addWidget(self.btn_user_panel)
         
-        split_view = QSplitter(Qt.Vertical)
+        split_view = self.packet_splitter = QSplitter(Qt.Vertical)
         split_view.addWidget(packet_section(tree_group, 'RX', self.tree))
         split_view.addWidget(packet_section(self.tx_panel, 'TX', self.tx_panel.tree))
         split_view.setSizes([400, 200]) # 상단 수신부와 하단 송신부의 초기 비율
+        # Keep the user's TX height; RX absorbs changes above the splitter.
+        split_view.setStretchFactor(0, 1)
+        split_view.setStretchFactor(1, 0)
         main_layout.addWidget(split_view, 1)  # stretch 인자를 1로 주어 가능한 많은 공간 할당
         split_view.setVisible(not self.viewer_only)
 
@@ -595,7 +603,9 @@ class UniversalCANMonitor(QMainWindow):
             QMessageBox.warning(self, "Warning", "그래프를 확인할 시그널을 트리 체크박스에서 1개 이상 선택해주세요.")
             return
             
-        return self._show_realtime_graph(selected_signals, bindings)
+        graph = self._show_realtime_graph(selected_signals, bindings)
+        self.uncheck_all_signals()
+        return graph
 
     def open_realtime_graph(self, entries):
         """Open panel-selected signals through the main graph routing/session path."""
@@ -623,6 +633,9 @@ class UniversalCANMonitor(QMainWindow):
         graph.show()
         return graph
         
+    def close_graphs(self):
+        close_graph_windows(self)
+
     def handle_sync_toggle(self, graph_window, is_checked):
         """그래프 창의 Sync 체크 상태 변경을 처리하여 순서가 있는 리스트를 관리합니다."""
         if is_checked:
@@ -651,8 +664,16 @@ class UniversalCANMonitor(QMainWindow):
         
     def uncheck_all_signals(self):
         """트리에서 체크된 모든 시그널의 체크를 해제합니다."""
-        for item in self.signal_tree_items.values():
-            item.setCheckState(3, Qt.Unchecked)
+        # Walk the tree: different CAN IDs can contain the same signal name.
+        blocked = self.tree.blockSignals(True)
+        try:
+            for index in range(self.tree.topLevelItemCount()):
+                message = self.tree.topLevelItem(index)
+                message.setCheckState(3, Qt.Unchecked)
+                for row in range(message.childCount()):
+                    message.child(row).setCheckState(3, Qt.Unchecked)
+        finally:
+            self.tree.blockSignals(blocked)
             
     def clear_monitoring_data(self):
         """실시간 모니터링 중인 트리 데이터와 수집된 통계를 초기화합니다."""
@@ -730,7 +751,7 @@ class UniversalCANMonitor(QMainWindow):
                 for sig_name, sig_val in decoded_data.items():
                     signal_def = db_msg.get_signal_by_name(sig_name)
                     unit = signal_def.unit if signal_def and signal_def.unit else ""
-                    rx_thread.latest_data[sig_name] = (sig_val, unit, now)
+                    rx_thread.latest_data[(can_id, sig_name)] = (sig_val, unit, now)
             except Exception:
                 pass
 
@@ -1696,7 +1717,7 @@ class UniversalCANMonitor(QMainWindow):
         # self.tree.setSortingEnabled(False)
 
         # 1. Message Node (Root)를 메모리에서 먼저 생성 (트리에 추가하기 전)
-        msg_item = SortableTreeWidgetItem()
+        msg_item = ReceiveTreeWidgetItem()
         can_id_str = f"0x{can_id:03X}" if can_id <= 0x7FF else f"0x{can_id:X}"
         msg_item.setText(0, str(bus_num))
         msg_item.setText(1, "-") # Type
@@ -1718,7 +1739,7 @@ class UniversalCANMonitor(QMainWindow):
         
         # 2. Signal Node (Child)를 생성하여 메모리 상의 부모 노드에 추가
         for sig in signals:
-            sig_item = SortableTreeWidgetItem(msg_item)
+            sig_item = ReceiveTreeWidgetItem(msg_item)
             # .sym 파일 등 start_bit 속성이 없는 경우를 대비하여 방어 코드 추가
             if hasattr(sig, 'start_bit'):
                 sig_item.setData(3, Qt.UserRole, sig.start_bit) # 정렬을 위해 start_bit 저장
@@ -1735,10 +1756,9 @@ class UniversalCANMonitor(QMainWindow):
             sig_item.setFlags(sig_item.flags() | Qt.ItemIsUserCheckable)
             sig_item.setCheckState(3, Qt.Unchecked)
             
-            self.signal_tree_items[(bus_num, sig.name)] = sig_item
-            key = (bus_num, sig.name)
-            self.signal_display_decimals[key] = max(
-                self.signal_display_decimals.get(key, 3), _signal_display_decimals(sig))
+            key = (bus_num, can_id, sig.name)
+            self.signal_tree_items[key] = sig_item
+            self.signal_display_decimals[key] = _signal_display_decimals(sig)
             
             # Enum 정보 저장
             if getattr(sig, 'choices', None):
@@ -1821,14 +1841,16 @@ class UniversalCANMonitor(QMainWindow):
                 pass
                 
             try:
-                for sig_name, (val, unit, ts) in list(rx_thread.latest_data.items()):
-                    if (bus_num, sig_name) in self.signal_tree_items:
-                        item = self.signal_tree_items[(bus_num, sig_name)]
+                for (can_id, sig_name), (val, unit, ts) in list(rx_thread.latest_data.items()):
+                    key = (bus_num, can_id, sig_name)
+                    if key in self.signal_tree_items:
+                        item = self.signal_tree_items[key]
                         from PyQt5.QtGui import QColor
                         for i in range(self.tree.columnCount()):
                             item.setBackground(i, QColor(Qt.transparent))
                         
-                        choices = getattr(self, 'signal_choices', {}).get((bus_num, sig_name))
+                        message = self.db_messages[bus_num].get(can_id)
+                        choices = message.get_signal_by_name(sig_name).choices if message is not None else None
                         if choices:
                             if isinstance(val, (int, float)) and int(val) in choices:
                                 display_val = f"{choices[int(val)]} ({val})" # Enum 매칭 시 문자열과 수치값 함께 출력
@@ -1837,14 +1859,14 @@ class UniversalCANMonitor(QMainWindow):
                                 num_val = next((k for k, v in choices.items() if str(v) == val_str), None)
                                 display_val = f"{val_str} ({num_val})" if num_val is not None else val_str
                         else:
-                            decimals = self.signal_display_decimals.get((bus_num, sig_name), 3)
+                            decimals = self.signal_display_decimals.get(key, 3)
                             display_val = val if isinstance(val, str) else (
                                 f"{val:.{decimals}f}" if isinstance(val, float) else str(val))
                         item.setText(5, display_val)
 
                     if self.user_panel_window and self.user_panel_window.isVisible():
                         try:
-                            self.user_panel_window.on_signal_update(bus_num, sig_name, val, unit, ts)
+                            self.user_panel_window.on_signal_update(bus_num, sig_name, val, unit, ts, can_id=can_id)
                         except RuntimeError:
                             self.user_panel_window = None
                             
@@ -1864,10 +1886,10 @@ class UniversalCANMonitor(QMainWindow):
                 items_to_remove.append(item)
                 del self.msg_tree_items[(b, can_id)]
                 
-        for (b, sig_name) in list(self.signal_tree_items.keys()):
+        for (b, can_id, sig_name) in list(self.signal_tree_items.keys()):
             if b == bus_num:
-                del self.signal_tree_items[(b, sig_name)]
-                self.signal_display_decimals.pop((b, sig_name), None)
+                del self.signal_tree_items[(b, can_id, sig_name)]
+                self.signal_display_decimals.pop((b, can_id, sig_name), None)
                 if (b, sig_name) in getattr(self, 'signal_choices', {}):
                     del self.signal_choices[(b, sig_name)]
                 

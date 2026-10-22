@@ -18,7 +18,7 @@ class CANReceiverThread(QThread):
         self.bus = bus
         self.db_messages = db_messages  # {can_id: cantools.Message}
         self.running = False
-        self.latest_data = {}  # {signal_name: (value, unit, timestamp)}
+        self.latest_data = {}  # {(can_id, signal_name): (value, unit, timestamp)}
         self.latest_rx_data = {}  # {can_id: (raw_payload, timestamp)}; excludes local Tx echoes
         self.latest_msg_stats = {}  # {can_id: {"count": 0, "cycle": 0.0, "last_time": None, "data": b""}}
         
@@ -88,7 +88,7 @@ class CANReceiverThread(QThread):
                         for sig_name, sig_val in decoded_data.items():
                             signal_def = db_msg.get_signal_by_name(sig_name)
                             unit = signal_def.unit if signal_def.unit else ""
-                            self.latest_data[sig_name] = (sig_val, unit, now) # 정규화된 타임스탬프 사용
+                            self.latest_data[(can_id, sig_name)] = (sig_val, unit, now)
                     except Exception as e:
                         pass # 데이터 길이 오류 등 예외 처리
             except Exception as e:

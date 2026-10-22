@@ -49,6 +49,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .config_dialog import WidgetConfigDialog, minimum_tool_spans, tab_names
+from .container_grid import ContainerGrid
 from .rx_grid import RxGridControl
 from .sequence import SequenceControl, validate_steps
 from .mode_security import verify_edit_password, verify_communication_password
@@ -228,6 +229,7 @@ class UserPanelWindow(QWidget):
         self.widget_frames = {}
         self.widget_controls = {}
         self.widget_child_hosts = {}
+        self._container_pages = {}
         self.selected_widget_id = None
         self.selected_widget_ids = set()
         self._tool_clipboard = []
@@ -1764,8 +1766,9 @@ class UserPanelWindow(QWidget):
     def _child_host_layout(self, parent_id):
         control = self.widget_controls.get(parent_id)
         if isinstance(control, QTabWidget):
-            return control.currentWidget().layout()
-        return self.widget_child_hosts.get(parent_id) or self.canvas_layout
+            return control.currentWidget().grid
+        layout = self.widget_child_hosts.get(parent_id)
+        return layout if layout is not None else self.canvas_layout
 
     def _cell_from_global_in_parent(self, parent_id, global_pos):
         layout = self._child_host_layout(parent_id)
@@ -1952,26 +1955,14 @@ class UserPanelWindow(QWidget):
         self.grid_cols = new_cols
         self._sync_canvas_size()
         self.canvas_layout.activate()
-        # Container grids share the logical dimensions of the canvas. Keep
-        # existing layouts in sync so rebuilding does not change their tracks.
-        for wid, host_layout in self.widget_child_hosts.items():
-            if host_layout is None:
-                continue
-            control = self.widget_controls.get(wid)
-            layouts = ([control.widget(i).layout() for i in range(control.count())]
-                       if isinstance(control, QTabWidget) else [host_layout])
-            for layout in layouts:
-                for row in range(self.grid_rows):
-                    layout.setRowStretch(row, 1)
-                for col in range(self.grid_cols):
-                    layout.setColumnStretch(col, 1)
-                layout.activate()
+        # Child cells keep their pixel pitch independently of canvas dimensions.
         self._refresh_selection_ui()
 
     def rebuild_grid(self):
         self.stop_panel_commands("패널 도구 갱신")
         tab_indices = {wid: control.currentIndex() for wid, control in self.widget_controls.items()
                        if isinstance(control, QTabWidget)}
+        scroll_positions = {key: page.scroll_position() for key, page in self._container_pages.items()}
         while self.canvas_layout.count():
             item = self.canvas_layout.takeAt(0)
             w = item.widget()
@@ -1983,6 +1974,7 @@ class UserPanelWindow(QWidget):
         self.widget_frames.clear()
         self.widget_controls.clear()
         self.widget_child_hosts.clear()
+        self._container_pages.clear()
         self._hide_drag_preview()
         self._sync_canvas_size()
 
@@ -2069,14 +2061,19 @@ class UserPanelWindow(QWidget):
                 parent_ctrl = self.widget_controls.get(parent_id)
                 if isinstance(parent_ctrl, QTabWidget):
                     tab_index = max(0, min(parent_ctrl.count() - 1, int(cfg.get("tab_index", 0))))
-                    host_layout = parent_ctrl.widget(tab_index).layout()
+                    host_layout = parent_ctrl.widget(tab_index).grid
                 host_layout.addWidget(frame, row, col, row_span, col_span)
             else:
                 self.canvas_layout.addWidget(frame, row, col, row_span, col_span)
 
             frame.raise_()
 
+        for page in self._container_pages.values():
+            page.refresh_extent()
         self._apply_page_visibility()
+        for key, position in scroll_positions.items():
+            if key in self._container_pages:
+                self._container_pages[key].restore_scroll(position)
         self._refresh_selection_ui()
         self._refresh_tool_list()
         self._sync_frame_timers_from_configs()
@@ -2534,34 +2531,20 @@ class UserPanelWindow(QWidget):
 
         if wtype == "group_box":
             grp = FittingGroupBox(cfg.get("title", "Group"))
-            inner = QWidget()
-            inner_layout = QGridLayout(inner)
-            inner_layout.setContentsMargins(4, 4, 4, 4)
-            # QGridLayout inserts spacing only around occupied tracks, which
-            # shifts cell positions as tools move. Use a continuous grid.
-            inner_layout.setSpacing(0)
-            for r in range(self.grid_rows):
-                inner_layout.setRowStretch(r, 1)
-            for c in range(self.grid_cols):
-                inner_layout.setColumnStretch(c, 1)
+            page = ContainerGrid(self.grid_cell_size)
+            self._container_pages[(cfg['id'], 0)] = page
             grp_lay = QVBoxLayout(grp)
             grp_lay.setContentsMargins(6, 6, 6, 6)
-            grp_lay.addWidget(inner, 1)
-            return grp, inner_layout
+            grp_lay.addWidget(page, 1)
+            return grp, page.grid
 
         if wtype == "tab_container":
             tabs = QTabWidget()
-            for name in tab_names(cfg):
-                page = QWidget()
-                layout = QGridLayout(page)
-                layout.setContentsMargins(4, 4, 4, 4)
-                layout.setSpacing(0)
-                for r in range(self.grid_rows):
-                    layout.setRowStretch(r, 1)
-                for c in range(self.grid_cols):
-                    layout.setColumnStretch(c, 1)
+            for index, name in enumerate(tab_names(cfg)):
+                page = ContainerGrid(self.grid_cell_size)
+                self._container_pages[(cfg['id'], index)] = page
                 tabs.addTab(page, str(name))
-            return tabs, tabs.widget(0).layout()
+            return tabs, tabs.widget(0).grid
 
         if wtype == "shape_line":
             line = QFrame()
@@ -3169,7 +3152,7 @@ class UserPanelWindow(QWidget):
             phys = raw * float(binding.get("scale", 1.0)) + float(binding.get("offset", 0.0))
             self._update_widget_value(cfg, phys, raw_value=raw)
 
-    def on_signal_update(self, bus, sig_name, value, unit, ts):
+    def on_signal_update(self, bus, sig_name, value, unit, ts, *, can_id=None):
         self.latest_value_by_signal[(bus, sig_name)] = value
 
         for cfg in self.widgets_config:
@@ -3181,6 +3164,8 @@ class UserPanelWindow(QWidget):
             if int(binding.get("bus", -1)) != int(bus):
                 continue
             if binding.get("signal_name") != sig_name:
+                continue
+            if can_id is not None and int(binding.get('can_id', -1)) != int(can_id):
                 continue
             if (cfg.get('widget_type') == 'label'
                     and (int(bus), int(binding.get('can_id', 0))) in self.latest_raw_by_msg):

@@ -360,9 +360,9 @@ class SessionManager(QObject):
             m.record_window = None
         if m.combined_view_window:
             combined = m.combined_view_window
-            combined.close()  # Restore widget ownership before disposing graphs.
+            combined.close()  # Close combined graphs before the remaining windows.
             combined.deleteLater()
-        for graph in m.active_graphs:
+        for graph in list(m.active_graphs):
             graph.close()
             graph.deleteLater()
         m.active_graphs = []

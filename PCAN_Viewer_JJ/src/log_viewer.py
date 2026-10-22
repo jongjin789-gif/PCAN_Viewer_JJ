@@ -10,6 +10,7 @@ from PyQt5.QtGui import QIcon, QFont, QColor, QKeySequence
 from src.utils import get_resource_path, SortableTreeWidgetItem
 from src.can_threads import LogParserThread
 from src.graph_log import LogGraphWindow
+from src.graph_lifecycle import close_graph_windows
 from src.button_icons import decorate_button
 from src.bus_config import BUS_IDS
 
@@ -95,6 +96,10 @@ class LogViewerWindow(QMainWindow):
         dbc_btn_layout.addWidget(self.search_input)
         
         dbc_btn_layout.addStretch()
+        self.btn_close_graphs = QPushButton("Close Graphs")
+        decorate_button(self.btn_close_graphs, 'graph_close', '이 로그뷰에서 연 모든 그래프를 닫습니다.')
+        self.btn_close_graphs.clicked.connect(self.close_graphs)
+        dbc_btn_layout.addWidget(self.btn_close_graphs)
         dbc_layout.addLayout(dbc_btn_layout)
         
         self.tree = QTreeWidget()
@@ -814,12 +819,15 @@ class LogViewerWindow(QMainWindow):
 
     def uncheck_all_signals(self):
         """트리에서 체크된 모든 시그널의 체크를 해제합니다."""
-        for i in range(self.tree.topLevelItemCount()):
-            msg_item = self.tree.topLevelItem(i)
-            for j in range(msg_item.childCount()):
-                sig_item = msg_item.child(j)
-                if sig_item.checkState(0) == Qt.Checked:
-                    sig_item.setCheckState(0, Qt.Unchecked)
+        blocked = self.tree.blockSignals(True)
+        try:
+            for index in range(self.tree.topLevelItemCount()):
+                message = self.tree.topLevelItem(index)
+                message.setCheckState(0, Qt.Unchecked)
+                for row in range(message.childCount()):
+                    message.child(row).setCheckState(0, Qt.Unchecked)
+        finally:
+            self.tree.blockSignals(blocked)
                     
     def filter_tree_items(self, text):
         """검색어에 따라 트리 뷰의 메시지/시그널을 필터링합니다."""
@@ -881,6 +889,10 @@ class LogViewerWindow(QMainWindow):
         graph = LogGraphWindow(plot_data, viewer_window=self)
         self.active_graphs.append(graph)
         graph.show()
+        self.uncheck_all_signals()
+
+    def close_graphs(self):
+        close_graph_windows(self)
 
     def handle_sync_toggle(self, graph_window, is_checked):
         """그래프 창의 Sync 체크 상태 변경을 처리하여 순서가 있는 리스트를 관리합니다."""

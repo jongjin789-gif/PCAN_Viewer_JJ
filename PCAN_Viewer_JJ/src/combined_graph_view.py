@@ -14,13 +14,15 @@ class CombinedGraphView(QWidget):
     """동기화된 여러 그래프를 하나의 창에 모아서 보여주는 뷰어"""
     def __init__(self, ordered_graphs, parent_window):
         super().__init__()
-        self.graphs = ordered_graphs
+        # Closing an individual graph removes it from the owner's sync list.
+        self.graphs = list(ordered_graphs)
         self.parent_window = parent_window
         self.original_parents = {} # 그래프 컨테이너의 원래 부모 위젯을 저장
         self.proxies = [] # 마우스 이동 시그널 프록시를 저장하여 연결 해제에 사용
         self._xrange_slots = []
         self._syncing_xrange = False
         self.parent_is_closing = False # 부모 창이 닫히고 있는지 여부를 나타내는 플래그
+        self._restore_individual_requested = False
 
         self.setWindowTitle("Combined Synchronized View")
         self.setWindowIcon(QIcon(get_resource_path(os.path.join("icon", "graph.png"))))
@@ -42,6 +44,10 @@ class CombinedGraphView(QWidget):
         self.chk_crosshair.setChecked(True)
         self.btn_clear_tags = graph_button(self, "Clear All Tags", "clear_tags")
         self.btn_screenshot = graph_button(self, "Screenshot", "screenshot")
+        self.btn_exit_combined = graph_button(self, "통합보기 종료", "exit_combined")
+        self.btn_exit_combined.setToolTip("통합보기 종료 (낱개 창으로 전환)")
+        self.btn_close_all = graph_button(self, "그래프 종료", "close_all")
+        self.btn_close_all.setToolTip("그래프 종료 (통합된 모든 그래프 닫기)")
 
         groups = [
             [self.btn_reset_zoom, self.btn_fit_all_data],
@@ -54,6 +60,9 @@ class CombinedGraphView(QWidget):
             self.btn_start.hide()
             self.btn_stop.hide()
         top_ctrl_layout = graph_toolbar(self, groups)
+        # graph_toolbar ends with a stretch; keep both exit actions at the right.
+        top_ctrl_layout.addWidget(self.btn_exit_combined)
+        top_ctrl_layout.addWidget(self.btn_close_all)
         main_layout.addLayout(top_ctrl_layout)
 
         # --- 그래프들을 담을 스크롤 영역 ---
@@ -75,6 +84,8 @@ class CombinedGraphView(QWidget):
         self.chk_crosshair.toggled.connect(self.do_toggle_crosshair)
         self.btn_clear_tags.clicked.connect(self.do_clear_tags)
         self.btn_screenshot.clicked.connect(self.do_screenshot)
+        self.btn_exit_combined.clicked.connect(self.exit_combined_view)
+        self.btn_close_all.clicked.connect(self.close_all_graphs)
 
     def _realtime_graphs(self):
         return [graph for graph in self.graphs
@@ -97,7 +108,7 @@ class CombinedGraphView(QWidget):
             graph.hide() # 원본 창 숨기기
             
             graph.graph_container.setParent(self.scroll_content)
-            self.scroll_layout.addWidget(graph.graph_container)
+            self.scroll_layout.addWidget(graph.graph_container, stretch=1)
             graph.plot_widget.setLabel('bottom', '') # X축 "Time" 레이블 생략
 
             # Add flag and reference for context-aware event handling
@@ -192,71 +203,75 @@ class CombinedGraphView(QWidget):
         for graph in self.graphs:
             graph.clear_all_tags()
 
-    def do_screenshot(self):
-        pixmaps = []
+    def _capture_graph_pixmaps(self):
+        # Snapshot every graph before changing any shared layout constraints.
+        # Capturing/restoring one at a time redistributes the remaining heights.
+        states = []
         for graph in self.graphs:
-            # 범례와 플롯의 원래 상태 저장
-            legend_state = {
-                'min_w': graph.legend_widget.minimumWidth(), 'max_w': graph.legend_widget.maximumWidth(),
-                'min_h': graph.legend_widget.minimumHeight(), 'max_h': graph.legend_widget.maximumHeight(),
-                'v_policy': graph.legend_widget.verticalScrollBarPolicy(), 'h_policy': graph.legend_widget.horizontalScrollBarPolicy(),
-                'elide_mode': graph.legend_widget.textElideMode(),
-                'size_policy_h': graph.legend_widget.sizePolicy().horizontalPolicy(),
-                'size_policy_v': graph.legend_widget.sizePolicy().verticalPolicy(),
-                'fixed_width': graph.legend_widget.width(), # Store current fixed width (should be 200)
-            }
-            plot_state = {
-                'min_h': graph.plot_widget.minimumHeight(), 'max_h': graph.plot_widget.maximumHeight(),
-                'size_policy_h': graph.plot_widget.sizePolicy().horizontalPolicy(),
-                'size_policy_v': graph.plot_widget.sizePolicy().verticalPolicy(),
-                'current_height': graph.plot_widget.height(), # Store current height of plot
-            }
+            legend = graph.legend_widget
+            margins = legend.contentsMargins()
+            legend_width = max(legend.width(), legend.sizeHintForColumn(0) + margins.left() + margins.right())
+            legend_height = (sum(max(0, legend.sizeHintForRow(row)) for row in range(legend.count()))
+                             + margins.top() + margins.bottom()
+                             + 2 * legend.spacing() * legend.count())
+            widgets = [(widget, widget.minimumSize(), widget.maximumSize(), widget.sizePolicy(), widget.size())
+                       for widget in (graph.graph_container, graph.plot_widget, legend)]
+            states.append(dict(
+                graph=graph, widgets=widgets, legend_width=legend_width,
+                height=max(graph.plot_widget.height(), legend_height),
+                v_policy=legend.verticalScrollBarPolicy(), h_policy=legend.horizontalScrollBarPolicy(),
+                elide_mode=legend.textElideMode(), selection=legend.selectedItems(),
+                v_scroll=legend.verticalScrollBar().value(), h_scroll=legend.horizontalScrollBar().value(),
+            ))
+        if not states:
+            return []
 
-            # 스크린샷을 위해 범례 위젯 임시 수정 (스크롤바 제거 및 전체 내용 표시)
-            graph.legend_widget.setMinimumSize(0, 0)
-            graph.legend_widget.setMaximumSize(16777215, 16777215)
-            graph.legend_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            graph.legend_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            graph.legend_widget.setTextElideMode(Qt.ElideNone)
-            graph.legend_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred) # Allow sizeHint to be accurate
-
-            # 레이아웃 업데이트를 강제하여 sizeHint가 정확한 값을 반환하도록 함
-            ideal_size = graph.legend_widget.sizeHint()
-            
-            # 범례의 이상적인 높이와 현재 플롯의 높이 중 더 큰 값으로 두 위젯의 높이를 맞춤
-            target_height = max(plot_state['current_height'], ideal_size.height())
-
-            graph.legend_widget.setFixedSize(ideal_size.width(), target_height) # 너비는 이상적인 너비, 높이는 맞춘 높이
-            graph.plot_widget.setFixedHeight(target_height) # 플롯 위젯 높이도 맞춤
-            
-            # QApplication.processEvents()를 호출하여 레이아웃 변경이 화면에 반영되도록 함
-            # 특히 Combined View에서는 여러 그래프가 동시에 변경되므로 중요
+        height = max(state['height'] for state in states)
+        legend_width = max(state['legend_width'] for state in states)
+        width = max(state['graph'].graph_container.width() - state['graph'].legend_widget.width()
+                    + legend_width for state in states)
+        try:
+            for state in states:
+                graph = state['graph']
+                legend = graph.legend_widget
+                margins = graph.graph_container.layout().contentsMargins()
+                graph.graph_container.setFixedSize(width, height + margins.top() + margins.bottom())
+                graph.plot_widget.setFixedHeight(height)
+                legend.setFixedSize(legend_width, height)
+                legend.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                legend.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                legend.setTextElideMode(Qt.ElideNone)
+                legend.clearSelection()
+            # Settle all graphs together, keeping their capture sizes fixed.
             QApplication.processEvents()
-            QApplication.processEvents() # 한 번 더 호출하여 안정성 확보
-
-            # 선택 해제 및 GUI 업데이트 후 스크린샷 캡처
-            saved_selection = graph.legend_widget.selectedItems()
-            graph.legend_widget.clearSelection()
             QApplication.processEvents()
-            pixmaps.append(graph.graph_container.grab())
+            for state in states:
+                state['graph'].legend_widget.scrollToTop()
+                state['graph'].legend_widget.horizontalScrollBar().setValue(0)
+            return [state['graph'].graph_container.grab() for state in states]
+        finally:
+            for state in states:
+                legend = state['graph'].legend_widget
+                for widget, minimum, maximum, policy, size in state['widgets']:
+                    widget.setMinimumSize(minimum)
+                    widget.setMaximumSize(maximum)
+                    widget.setSizePolicy(policy)
+                    widget.resize(size)
+                legend.setVerticalScrollBarPolicy(state['v_policy'])
+                legend.setHorizontalScrollBarPolicy(state['h_policy'])
+                legend.setTextElideMode(state['elide_mode'])
+                for item in state['selection']:
+                    item.setSelected(True)
+                legend.doItemsLayout()
+            QApplication.processEvents()
+            QApplication.processEvents()
+            for state in states:
+                legend = state['graph'].legend_widget
+                legend.verticalScrollBar().setValue(state['v_scroll'])
+                legend.horizontalScrollBar().setValue(state['h_scroll'])
 
-            # 원래 상태로 완벽하게 복원
-            for item in saved_selection:
-                item.setSelected(True)
-            
-            graph.legend_widget.setMinimumSize(legend_state['min_w'], legend_state['min_h'])
-            graph.legend_widget.setMaximumSize(legend_state['max_w'], legend_state['max_h'])
-            graph.legend_widget.setVerticalScrollBarPolicy(legend_state['v_policy'])
-            graph.legend_widget.setHorizontalScrollBarPolicy(legend_state['h_policy'])
-            graph.legend_widget.setTextElideMode(legend_state['elide_mode'])
-            graph.legend_widget.setSizePolicy(legend_state['size_policy_h'], legend_state['size_policy_v'])
-            graph.legend_widget.setFixedWidth(legend_state['fixed_width']) # Restore fixed width
-
-            # Restore plot widget's original size policy and remove fixed height constraint
-            graph.plot_widget.setSizePolicy(plot_state['size_policy_h'], plot_state['size_policy_v'])
-            graph.plot_widget.setMinimumHeight(0)
-            graph.plot_widget.setMaximumHeight(16777215)
-        
+    def do_screenshot(self):
+        pixmaps = self._capture_graph_pixmaps()
         if not pixmaps: return
 
         total_width = max(p.width() for p in pixmaps)
@@ -293,16 +308,18 @@ class CombinedGraphView(QWidget):
         except Exception as e:
             show_error(self, "Error", f"스크린샷 저장 중 오류 발생:\n{str(e)}")
 
-    def closeEvent(self, event):
-        """창이 닫힐 때 그래프 위젯들을 원래 창으로 복원하고 동기화를 해제합니다."""
-        # 부모 창(메인/로그뷰어)이 닫히는 과정에서 이 창이 닫히는 것이라면,
-        # 개별 그래프 창으로 복원하는 로직을 건너뛰고 그냥 닫히도록 합니다.
-        if self.parent_is_closing:
-            if self.parent_window:
-                self.parent_window.combined_view_window = None
-            event.accept()
-            return
+    def exit_combined_view(self):
+        """Leave the combined view and show its individual graph windows."""
+        self._restore_individual_requested = True
+        self.close()
 
+    def close_all_graphs(self):
+        """Close the combined view and its graphs without showing individual windows."""
+        self._restore_individual_requested = False
+        self.close()
+
+    def closeEvent(self, event):
+        """Closing disposes graphs unless the explicit uncombine action was used."""
         # 1. 마우스 이동 시그널 프록시 연결 해제
         for proxy in self.proxies:
             proxy.disconnect()
@@ -313,6 +330,13 @@ class CombinedGraphView(QWidget):
             except (TypeError, RuntimeError):
                 pass
         self._xrange_slots.clear()
+
+        # Parent shutdown already closes the source windows.
+        if self.parent_is_closing:
+            if self.parent_window:
+                self.parent_window.combined_view_window = None
+            event.accept()
+            return
 
         # 2. X축 연결 해제 및 위젯 복원
         for graph in self.graphs:
@@ -326,9 +350,16 @@ class CombinedGraphView(QWidget):
             if original_parent:
                 graph.graph_container.setParent(original_parent)
                 graph.layout().addWidget(graph.graph_container, stretch=1)
-                # 원래 창으로 돌아갈 때, 전체 데이터가 보이도록 뷰를 자동으로 리셋합니다.
-                graph.plot_widget.autoRange()
-                graph.show()
+                if self._restore_individual_requested:
+                    # 원래 창으로 돌아갈 때 전체 데이터가 보이도록 리셋합니다.
+                    graph.plot_widget.autoRange()
+                    graph.show()
+            if not self._restore_individual_requested:
+                graph.close()
+                graph.deleteLater()
+
+        self.graphs.clear()
+        self.original_parents.clear()
         
         if self.parent_window:
             self.parent_window.combined_view_window = None

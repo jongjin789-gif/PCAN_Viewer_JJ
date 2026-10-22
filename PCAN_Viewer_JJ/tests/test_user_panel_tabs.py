@@ -31,16 +31,16 @@ class PanelTabsTest(unittest.TestCase):
         for instance in (panel, restored):
             tabs = instance.widget_controls['tabs']
             self.assertEqual([tabs.tabText(i) for i in range(tabs.count())], ['Status', 'Motor', 'IMU'])
-            self.assertIs(instance.widget_frames['imu'].parentWidget(), tabs.widget(2))
-            self.assertIs(instance.widget_frames['default'].parentWidget(), tabs.widget(0))
-            self.assertIs(instance.widget_frames['clamped'].parentWidget(), tabs.widget(2))
+            self.assertIs(instance.widget_frames['imu'].parentWidget(), tabs.widget(2).canvas)
+            self.assertIs(instance.widget_frames['default'].parentWidget(), tabs.widget(0).canvas)
+            self.assertIs(instance.widget_frames['clamped'].parentWidget(), tabs.widget(2).canvas)
 
     def test_legacy_tabs_keep_default_names_and_first_tab(self):
         panel = self.panel([dict(id='tabs', widget_type='tab_container'),
                             dict(id='child', widget_type='label', parent_id='tabs')])
         tabs = panel.widget_controls['tabs']
         self.assertEqual([tabs.tabText(i) for i in range(tabs.count())], ['Tab 1', 'Tab 2'])
-        self.assertIs(panel.widget_frames['child'].parentWidget(), tabs.widget(0))
+        self.assertIs(panel.widget_frames['child'].parentWidget(), tabs.widget(0).canvas)
 
     def test_create_tab_tool_and_edit_names_in_properties(self):
         editor = WidgetConfigDialog({}, live_preview_default=False)
@@ -88,7 +88,7 @@ class PanelTabsTest(unittest.TestCase):
             self.assertEqual([tabs.tabText(i) for i in range(tabs.count())], ['A', 'C'])
             for ident, index in (('a', 0), ('b', 1), ('c', 1), ('d', 1)):
                 self.assertEqual(instance._cfg_by_id(ident)['tab_index'], index)
-                self.assertIs(instance.widget_frames[ident].parentWidget(), tabs.widget(index))
+                self.assertIs(instance.widget_frames[ident].parentWidget(), tabs.widget(index).canvas)
             self.assertIsNotNone(instance.widget_frames['nested'])
         self.assertEqual(panel.widget_controls['tabs'].currentIndex(), 1)
         panel.undo_edit()
@@ -120,7 +120,7 @@ class PanelTabsTest(unittest.TestCase):
         self.assertEqual(editor.combo_parent_tab.currentText(), 'B')
         editor.combo_parent_tab.setCurrentIndex(0)
         editor.accept()
-        self.assertIs(panel.widget_frames['child'].parentWidget(), panel.widget_controls['tabs'].widget(0))
+        self.assertIs(panel.widget_frames['child'].parentWidget(), panel.widget_controls['tabs'].widget(0).canvas)
         panel.widget_controls['tabs'].setCurrentIndex(1)
         panel.rebuild_grid()
         self.assertEqual(panel.widget_controls['tabs'].currentIndex(), 1)

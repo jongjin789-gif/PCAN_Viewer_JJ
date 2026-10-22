@@ -207,6 +207,8 @@ class SignalGraphWindow(QWidget):
         # 마우스 클릭 이벤트 (원하는 데이터 지점에 태그/마커 고정)
         self.plot_widget.scene().sigMouseClicked.connect(self.on_mouse_clicked)
         self.set_auto_y(True)
+        # Register new windows in the owner's ordered sync list by default.
+        self.chk_sync.setChecked(True)
 
     def get_parent_window(self):
         """상위 부모 윈도우(메인 또는 뷰어)를 반환합니다."""
@@ -223,6 +225,14 @@ class SignalGraphWindow(QWidget):
         parent = self.get_parent_window()
         if parent and hasattr(parent, 'open_combined_view'):
             parent.open_combined_view()
+
+    def closeEvent(self, event):
+        parent = self.get_parent_window()
+        for name in ('active_graphs', 'synced_graphs_ordered'):
+            graphs = getattr(parent, name, [])
+            if self in graphs:
+                graphs.remove(self)
+        event.accept()
 
     def _get_enum_string(self, sig_name, val):
         """시그널 이름과 값을 받아 해당하는 Enum 텍스트를 반환합니다."""

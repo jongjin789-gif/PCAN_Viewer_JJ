@@ -11,6 +11,7 @@ def button_icon(name):
         'uncheck': 'icon/graph_controls/uncheck_all.svg',
         'start': 'icon/graph_controls/start.svg',
         'stop': 'icon/graph_controls/stop.svg',
+        'graph_close': 'icon/graph_controls/close_all.svg',
         'panel': 'icon/user_panel.svg',
     }
     return QIcon(get_resource_path(shared.get(name, f'icon/main_controls/{name}.svg')))

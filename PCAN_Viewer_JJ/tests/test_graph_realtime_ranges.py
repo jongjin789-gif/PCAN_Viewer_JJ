@@ -49,7 +49,7 @@ class RealtimeGraphRangeTest(unittest.TestCase):
         first = self.graph('first', [(0, 1), (50, 2), (90, 3)])
         second = self.graph('second', [(5, 10), (60, 20), (100, 30)])
         combined = CombinedGraphView([first, second], None)
-        self.addCleanup(combined.close)
+        self.addCleanup(combined.exit_combined_view)
         combined.show()
         self.app.processEvents()
 

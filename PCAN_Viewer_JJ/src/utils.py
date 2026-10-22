@@ -56,6 +56,25 @@ class SortableTreeWidgetItem(QTreeWidgetItem):
         # 다른 모든 경우 (다른 컬럼, 시그널 항목 등)에는 기본 문자열 비교 사용
         return self.text(column) < other.text(column)
 
+class ReceiveTreeWidgetItem(SortableTreeWidgetItem):
+    """RX headers sort their displayed values; Bus also sorts by CAN ID."""
+
+    def _sort_value(self, column):
+        text = self.text(column)
+        if column in (0, 2, 5, 7, 8):
+            try:
+                return (0, int(text, 16) if column == 2 else float(text))
+            except ValueError:
+                pass
+        return (1, text)
+
+    def __lt__(self, other):
+        column = self.treeWidget().sortColumn()
+        if column == 0 and self.parent() is None and other.parent() is None:
+            return (self._sort_value(0), self._sort_value(2)) < (other._sort_value(0), other._sort_value(2))
+        return self._sort_value(column) < other._sort_value(column)
+
+
 class TimeAxisItem(pg.AxisItem):
     """X축(시간)을 HH:mm:ss.000 포맷으로 표시하기 위한 커스텀 축"""
     def __init__(self, *args, **kwargs):

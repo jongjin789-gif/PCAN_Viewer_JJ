@@ -1,0 +1,22 @@
+FormatVersion=6.0
+Title="Duplicate alive counters"
+{ENUMS}
+Enum=ECM_Locking(0="Unlocking", 1="Locking")
+{SENDRECEIVE}
+[ECU_STR_SYS_CMD]
+ID=500h
+Len=8
+Var=B00_Alive_Counter unsigned 0,4
+Var=B04_ECM_Locking_L_Stat unsigned 4,2 /e:ECM_Locking
+Var=B06_ECM_Locking_R_Stat unsigned 6,2 /e:ECM_Locking
+[ECU_STR_MAIN_DEV_ST]
+ID=510h
+Len=8
+Var=B00_Alive_Counter unsigned 0,4
+Var=B04_ECM_L_Sync unsigned 4,2
+Var=B06_ECM_R_Sync unsigned 6,2
+Var=B08_Dumy_1 unsigned 8,8
+Var=B08_Dumy_2 unsigned 16,8
+Var=B24_ECM_L_Angle signed 24,16 /u:deg /f:0.01
+Var=B40_Dumy_3 unsigned 40,8
+Var=B48_ECM_R_Angle signed 48,16 /u:deg /f:0.01

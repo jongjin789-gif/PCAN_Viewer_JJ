@@ -160,6 +160,8 @@ class LogGraphWindow(QWidget):
         self.combo_hover_signal.currentIndexChanged.connect(self.on_hover_target_changed)
         self.on_hover_target_changed()
         self.plot_widget.scene().sigMouseClicked.connect(self.on_mouse_clicked)
+        # Notify the viewer after all controls and callbacks are ready.
+        self.chk_sync.setChecked(True)
 
     def get_time_bounds(self):
         bounds = [(data['times'][0], data['times'][-1])

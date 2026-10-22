@@ -25,7 +25,7 @@ class CombinedLogRangeTest(unittest.TestCase):
     def combined(self, graphs):
         view = CombinedGraphView(graphs, None)
         self.addCleanup(view.deleteLater)
-        self.addCleanup(view.close)
+        self.addCleanup(view.exit_combined_view)
         view.show()
         self.app.processEvents()
         return view
