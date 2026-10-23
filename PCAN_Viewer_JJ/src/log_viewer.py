@@ -13,6 +13,7 @@ from src.graph_log import LogGraphWindow
 from src.graph_lifecycle import close_graph_windows
 from src.button_icons import decorate_button
 from src.bus_config import BUS_IDS
+from src.tx_schedule import bus_schedule
 
 
 class LogViewerWindow(QMainWindow):
@@ -55,6 +56,11 @@ class LogViewerWindow(QMainWindow):
         self.send_timer.setTimerType(Qt.PreciseTimer)
         self.send_timer.setSingleShot(True)
         self.send_timer.timeout.connect(self.send_next_packet)
+        self._pending_single = None
+        self._single_send_timer = QTimer(self)
+        self._single_send_timer.setTimerType(Qt.PreciseTimer)
+        self._single_send_timer.setSingleShot(True)
+        self._single_send_timer.timeout.connect(self._retry_single_send)
         self.send_start_time = 0
         self.log_start_offset_ms = 0
         
@@ -616,6 +622,10 @@ class LogViewerWindow(QMainWindow):
 
     def start_sending(self):
         if not self.main_window or self._filtering or self._populating: return
+        if self._pending_single is not None and self.highlighted_row is not None:
+            self.clear_row_highlight(self.highlighted_row)
+        self._single_send_timer.stop()
+        self._pending_single = None
         self._send_logs = self.get_visible_log_data()
         if not self._send_logs:
             self.btn_send.setChecked(False)
@@ -625,9 +635,6 @@ class LogViewerWindow(QMainWindow):
             QMessageBox.warning(self, "전송 불가", "연결된 CAN 채널이 없습니다.")
             self.btn_send.setChecked(False)
             return
-
-        if hasattr(self.main_window, 'tx_panel'):
-            self.main_window.tx_panel.stop_all_timers()
 
         self.is_sending = True
 
@@ -655,7 +662,10 @@ class LogViewerWindow(QMainWindow):
         self.send_next_packet()
 
     def stop_sending(self):
-        was_sending = self.is_sending or self.send_timer.isActive()
+        had_pending_single = self._pending_single is not None
+        self._single_send_timer.stop()
+        self._pending_single = None
+        was_sending = self.is_sending or self.send_timer.isActive() or had_pending_single
         self.is_sending = False
         if self.send_timer.isActive():
             self.send_timer.stop()
@@ -670,6 +680,8 @@ class LogViewerWindow(QMainWindow):
 
     def on_send_single_clicked(self):
         if not self.main_window or self.is_sending or self._filtering or self._populating: return
+        if self._pending_single is not None:
+            return
 
         selected_row = self.log_table.currentRow()
         if selected_row < 0 or self.log_table.isRowHidden(selected_row):
@@ -704,17 +716,42 @@ class LogViewerWindow(QMainWindow):
             is_fd = 'F' in msg_type or 'B' in msg_type or 'E' in msg_type or log_entry['dlc'] > 8
             is_brs = 'B' in msg_type
             msg = can.Message(arbitration_id=log_entry['can_id'], data=log_entry['data'], is_extended_id=log_entry.get('is_extended_id', log_entry['can_id'] > 0x7FF), is_fd=is_fd, bitrate_switch=is_brs)
-            bus_obj.send(msg)
-
-            if hasattr(self.main_window, 'record_tx_activity'):
-                self.main_window.record_tx_activity(target_bus_num, log_entry['can_id'], log_entry['data'], is_fd)
-
-            QTimer.singleShot(200, lambda: self.clear_row_highlight(selected_row))
+            if not bus_schedule(self.main_window, target_bus_num).send_log(bus_obj, msg):
+                self._pending_single = (selected_row, target_bus_num, bus_obj, msg)
+                self._single_send_timer.start(1)
+                return
+            self._record_single_send(selected_row, target_bus_num, msg)
         except Exception as e:
             show_error(self, "전송 오류", f"선택된 로그를 전송하는 중 오류가 발생했습니다:\n{e}")
             self.clear_row_highlight(selected_row)
 
+    def _record_single_send(self, row, bus, msg):
+        if hasattr(self.main_window, 'record_tx_activity'):
+            self.main_window.record_tx_activity(bus, msg.arbitration_id, bytes(msg.data), msg.is_fd)
+        QTimer.singleShot(200, lambda: self.clear_row_highlight(row))
+
+    def _retry_single_send(self):
+        if self._is_closing or self._pending_single is None:
+            return
+        row, bus, device, msg = self._pending_single
+        if self.main_window.buses.get(bus) is not device:
+            self._pending_single = None
+            self.clear_row_highlight(row)
+            return
+        try:
+            if not bus_schedule(self.main_window, bus).send_log(device, msg):
+                self._single_send_timer.start(1)
+                return
+            self._pending_single = None
+            self._record_single_send(row, bus, msg)
+        except Exception as exc:
+            self._pending_single = None
+            self.clear_row_highlight(row)
+            show_error(self, "전송 오류", f"선택된 로그를 전송하는 중 오류가 발생했습니다:\n{exc}")
+
     def clear_row_highlight(self, row):
+        if self._is_closing:
+            return
         for j in range(self.log_table.columnCount()):
             item = self.log_table.item(row, j)
             if item:
@@ -788,7 +825,9 @@ class LogViewerWindow(QMainWindow):
             is_brs = 'B' in msg_type
             msg = can.Message(arbitration_id=current_log['can_id'], data=current_log['data'], is_extended_id=current_log.get('is_extended_id', current_log['can_id'] > 0x7FF), is_fd=is_fd, bitrate_switch=is_brs)
             try:
-                bus_obj.send(msg)
+                if not bus_schedule(self.main_window, target_bus_num).send_log(bus_obj, msg):
+                    self.send_timer.start(1)
+                    return  # Keep this row pending while periodic TX owns the bus.
                 if hasattr(self.main_window, 'record_tx_activity'):
                     self.main_window.record_tx_activity(target_bus_num, current_log['can_id'], current_log['data'], is_fd)
             except Exception as e:

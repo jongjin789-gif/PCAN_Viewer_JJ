@@ -115,6 +115,12 @@ class PanelOperationTest(unittest.TestCase):
         self.assertFalse(control.running)
 
     def test_packet_control_skips_commands_and_receives_including_failure_steps(self):
+        def wait_for_completion(control):
+            # The GUI event loop may be busy draining earlier tests' widgets.
+            deadline = time.monotonic() + 2
+            while control.running and time.monotonic() < deadline:
+                QTest.qWait(10)
+
         p = packet()
         panel = self.panel([], [p])
         panel.set_mode('run')
@@ -129,13 +135,13 @@ class PanelOperationTest(unittest.TestCase):
         self.assertFalse(control.packet_button.icon().isNull())
         with patch.object(panel, 'set_packet_transmission') as transmission, patch.object(control, '_send') as send:
             control.packet_button.click()
-            QTest.qWait(40)
+            wait_for_completion(control)
             self.assertEqual([call.args for call in transmission.call_args_list], [('p', True), ('p', False)])
             send.assert_not_called()
             self.assertFalse(control.running)
         with patch.object(panel, 'set_packet_transmission', side_effect=[ValueError('test failure'), None]) as transmission, patch.object(control, '_send') as send:
             control.packet_button.click()
-            QTest.qWait(40)
+            wait_for_completion(control)
             self.assertEqual([call.args for call in transmission.call_args_list], [('p', True), ('p', False)])
             send.assert_not_called()
             self.assertTrue(control.in_failure)

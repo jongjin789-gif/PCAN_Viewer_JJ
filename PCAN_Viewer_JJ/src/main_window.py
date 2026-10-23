@@ -89,6 +89,7 @@ class UniversalCANMonitor(QMainWindow):
         self.user_frame_properties = {} # User Panel 프레임 속성(BRS 등) 캐시
         self._session_generation = 0
         self._graph_pending_frames = {}
+        self._panel_pending_frames = {}
         
         self.init_ui()
         self.statusBar().messageChanged.connect(lambda message: self.panel_system_event(message) if message else None)
@@ -98,6 +99,10 @@ class UniversalCANMonitor(QMainWindow):
         # UI 갱신 타이머 (GUI 프리징 방지를 위해 50ms마다 렌더링) - 자동 연결(Open) 전에 미리 생성되어야 함
         self.ui_update_timer = QTimer(self)
         self.ui_update_timer.timeout.connect(self.update_ui_data)
+        self.panel_update_timer = QTimer(self)
+        self.panel_update_timer.setSingleShot(True)
+        self.panel_update_timer.setInterval(50)
+        self.panel_update_timer.timeout.connect(self.flush_panel_messages)
         self.bus_status_timer = QTimer(self)
         self.bus_status_timer.setInterval(1000)
         self.bus_status_timer.timeout.connect(self.poll_bus_status)
@@ -703,6 +708,7 @@ class UniversalCANMonitor(QMainWindow):
     def route_raw_msg_to_record(self, ts, can_id, data, is_ext, is_err, is_fd, is_rx, bus_num, is_brs=False):
         if not is_err:
             self._graph_pending_frames[(bus_num, can_id, is_ext)] = (ts, bytes(data))
+            self.queue_panel_message(bus_num, can_id, data, ts)
         panel = getattr(self, "user_panel_window", None)
         if is_rx and not is_err and panel is not None and panel.isVisible():
             panel.on_sequence_receive(ts, bus_num, can_id, data, is_ext, is_fd, is_brs)
@@ -713,14 +719,43 @@ class UniversalCANMonitor(QMainWindow):
         except RuntimeError:
             self.record_window = None
 
+    def queue_panel_message(self, bus_num, can_id, data, timestamp):
+        """Display valid RX and locally sent TX frames without requiring a driver echo."""
+        panel = self.user_panel_window
+        try:
+            if panel is None or not panel.isVisible():
+                return
+        except RuntimeError:
+            self.user_panel_window = None
+            return
+        key = (bus_num, can_id)
+        pending = self._panel_pending_frames.get(key)
+        if pending is None or timestamp >= pending[0]:
+            self._panel_pending_frames[key] = (timestamp, bytes(data))
+        if not self.panel_update_timer.isActive():
+            self.panel_update_timer.start()
+
+    def flush_panel_messages(self):
+        self.panel_update_timer.stop()
+        pending, self._panel_pending_frames = self._panel_pending_frames, {}
+        panel = self.user_panel_window
+        try:
+            if panel is not None and panel.isVisible():
+                for (bus_num, can_id), (timestamp, data) in pending.items():
+                    panel.on_message_update(bus_num, can_id, data, timestamp)
+        except RuntimeError:
+            self.user_panel_window = None
+
     def record_tx_activity(self, bus_num, can_id, data, is_fd, timestamp=None):
         """Rx 스레드를 거치지 않는 수동 Tx(로그 재생/Tx 패널)도 메인 트리에 즉시 반영합니다."""
-        rx_thread = self.rx_threads.get(bus_num)
-        if not rx_thread:
-            return
-
         now = time.time() if timestamp is None else timestamp
         payload = bytes(data)
+        rx_thread = self.rx_threads.get(bus_num)
+        if not rx_thread:
+            self.route_raw_msg_to_record(now, can_id, payload, can_id > 0x7FF,
+                                         False, bool(is_fd), False, bus_num)
+            return
+
         stats = rx_thread.latest_msg_stats.get(
             can_id,
             {"count": 0, "cycle": 0.0, "last_time": None, "data": b"", "is_fd": False, "direction": 'Tx'}
@@ -1355,6 +1390,7 @@ class UniversalCANMonitor(QMainWindow):
             if self.bus_issues.get(b, ('', ''))[1] == 'WARN':
                 self.bus_issues.pop(b, None)
             self._graph_pending_frames = {key: value for key, value in self._graph_pending_frames.items() if key[0] != b}
+            self._panel_pending_frames = {key: value for key, value in self._panel_pending_frames.items() if key[0] != b}
             if not already_busy:
                 self._bus_busy.discard(b)
             self.log_bus_event(b, '연결 해제')
@@ -1827,18 +1863,12 @@ class UniversalCANMonitor(QMainWindow):
                         item.setText(7, f"{stats['cycle']:.1f}")
                         item.setText(8, str(stats['count']))
 
-                        if self.user_panel_window and self.user_panel_window.isVisible():
-                            try:
-                                self.user_panel_window.on_message_update(
-                                    bus_num,
-                                    can_id,
-                                    stats.get("data", b""),
-                                    stats.get("last_time", time.time())
-                                )
-                            except RuntimeError:
-                                self.user_panel_window = None
+                    self.queue_panel_message(bus_num, can_id, stats.get('data', b''),
+                                             stats.get('last_time') or time.time())
             except RuntimeError:
                 pass
+
+            self.flush_panel_messages()
                 
             try:
                 for (can_id, sig_name), (val, unit, ts) in list(rx_thread.latest_data.items()):
@@ -1878,8 +1908,11 @@ class UniversalCANMonitor(QMainWindow):
             except RuntimeError:
                 pass
 
+        self.flush_panel_messages()
+
     def reset_tree_values(self, bus_num):
         """채널 재연결 시 기존 트리 데이터 및 UI 초기화"""
+        self._panel_pending_frames = {key: value for key, value in self._panel_pending_frames.items() if key[0] != bus_num}
         items_to_remove = []
         for (b, can_id), item in list(self.msg_tree_items.items()):
             if b == bus_num:
@@ -1907,6 +1940,8 @@ class UniversalCANMonitor(QMainWindow):
         self.session.autosave()
         self.session.timer.stop()
         self.bus_status_timer.stop()
+        self.panel_update_timer.stop()
+        self._panel_pending_frames.clear()
         self.session.stop_all()
         self._is_closing = True
         if not self.viewer_only:

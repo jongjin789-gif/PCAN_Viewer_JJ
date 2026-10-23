@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QAbstractItemView, QTableView, QHeaderView)
 from src.tx_panel import TxPacketDialog
 from src.tx_counter import counter_payload, latest_rx_payload
+from src.tx_schedule import bus_schedule
 from src.db_frame_format import compatible_signal_mapping
 from src.crc_utils import calculate_crc16_ccitt_false
 from .binding import pack_value, bit_positions
@@ -131,9 +132,8 @@ class PacketRuntime:
         self.states = {}
         self.alive = 0
         self.lock = threading.RLock()
-        if not hasattr(main, '_panel_bus_locks'):
-            main._panel_bus_locks = {bus: threading.RLock() for bus in PACKET_BUS_IDS}
-        self.bus_lock = main._panel_bus_locks[packet['bus']]
+        self.schedule = bus_schedule(main, packet['bus'])
+        self.bus_lock = self.schedule.lock
 
     def stage(self, binding, value):
         with self.lock:

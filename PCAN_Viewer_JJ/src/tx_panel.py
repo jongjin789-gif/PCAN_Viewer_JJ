@@ -9,14 +9,15 @@ import sys
 import json
 import math
 import base64
-from src.tx_counter import counter_payload, latest_rx_payload
+import queue
+from src.tx_runtime import TxRuntime
+from src.periodic_sender import PeriodicSender
 from src.db_frame_format import message_is_fd, compatible_signal_mapping
 from src.tx_crc import validate_crc, crc_order
 from src.tx_crc_dialog import SignalCRCDialog
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QTimer, QEvent
 from PyQt5.QtGui import QFont, QKeySequence
-from src.crc_utils import calculate_crc16_ccitt_false
 from src.utils import SortableTreeWidgetItem
 
 class TxPacketDialog(QDialog):
@@ -820,21 +821,36 @@ class TxPacketDialog(QDialog):
         self.on_data_edited() # Data Hex를 바탕으로 Grid Value 자동 갱신 트리거
         self.update_data_range_label()
 
+class _TxTimer:
+    """Compatibility handle for the main TX start/stop controls."""
+    def __init__(self, item):
+        self.item = item
+
+    def start(self, interval=None):
+        self.item.start_timer(interval)
+
+    def stop(self):
+        self.item.stop_timer()
+
+    def isActive(self):
+        task = self.item._periodic_task
+        return task is not None and task.isActive()
+
+
 class TxPacketItem(SortableTreeWidgetItem):
-    """송신용 트리 아이템이자 타이머를 동작시키는 컨트롤러"""
+    """GUI owner of a packet; periodic CAN work runs on a bus worker."""
     def __init__(self, parent, data, tx_panel):
         super().__init__(parent)
         self.tx_panel = tx_panel
         self.packet_data = data
-        self.timer = QTimer()
-        self.timer.setTimerType(Qt.PreciseTimer) # 타이머 오차를 최소화하여 정확한 Cycle Time 유지
-        self.timer.timeout.connect(self.send_packet)
+        self._periodic_task = None
+        self.timer = _TxTimer(self)
         self.is_running = False
         self.counter_states = {}
-        if self.packet_data.get('crc_type') == 'Hyundai_CRC':
-            self.packet_data['alive_counter'] = 0
+        if data.get('crc_type') == 'Hyundai_CRC':
+            data['alive_counter'] = 0
         self.update_ui()
-        
+
     def update_ui(self):
         d = self.packet_data
         self.setText(0, str(d["bus"]) if d['bus'] else '미선택 (송신 안 함)')
@@ -850,106 +866,73 @@ class TxPacketItem(SortableTreeWidgetItem):
         self.setText(9, str(d["count"]))
         self.setText(10, d["note"])
         
+    def _can_send(self):
+        d = self.packet_data
+        if d.get('bus') not in BUS_IDS or not self.tx_panel.buses.get(d['bus']):
+            return False
+        capabilities = self.tx_panel.main_window.bus_capabilities.get(d['bus'], {})
+        return d.get('length', 0) <= 8 or capabilities.get('is_fd', False)
+
+    def _sync_runtime(self, runtime):
+        # Only called on the GUI thread, including after stop joins an in-flight send.
+        with runtime.lock:
+            states = dict(runtime.states)
+            alive = runtime.packet.get('alive_counter')
+            count = runtime.packet['count'] + runtime.sent
+            payload = runtime.last_payload
+        # Qt sorting/painting and item-change callbacks must not hold the send lock.
+        self.counter_states = states
+        if alive is not None:
+            self.packet_data['alive_counter'] = alive
+        self.packet_data['count'] = count
+        self.setText(7, ' '.join(f'{b:02X}' for b in payload))
+        self.setText(9, str(count))
+
     def send_packet(self):
-        if self.packet_data.get('bus') not in BUS_IDS:
+        if not self._can_send():
             self.stop_timer()
+            self.tx_panel._update_action_button(self)
             return
-        bus_obj = self.tx_panel.buses.get(self.packet_data["bus"])
-        if bus_obj:
-            d = self.packet_data
-            # Compatibility check
-            # is_fd 플래그가 아닌, 실제 FD 전용 기능(DLC > 8) 사용 여부로 호환성 판단
-            bus_is_fd = self.tx_panel.main_window.bus_capabilities[d["bus"]].get('is_fd', False)
-            is_incompatible = d.get('length', 0) > 8
-            if is_incompatible and not bus_is_fd:
-                if self.is_running: # If it's a periodic message, stop it.
-                    self.stop_timer()
-                    self.tx_panel._update_action_button(self)
-                # BRS는 현재 UI에서 제어 불가하므로 DLC > 8인 경우만 FD 전용 기능으로 간주하여 전송을 무시합니다.
-                return # Ignore send command
-
-            try:
-                can_id = d["id"]
-                full_data = bytes(d["data"])
-                next_states = {}
-                if d.get("signal_counters"):
-                    db_msg = self.tx_panel.db_messages[d["bus"]][d["id"]]
-                    received_payload = latest_rx_payload(self.tx_panel.main_window, d['bus'], can_id)
-                    full_data, next_states = counter_payload(
-                        db_msg, full_data, d["signal_counters"], self.counter_states,
-                        received_payload=received_payload)
-                total_length = d["length"]
-
-                if d.get('crc_type') == 'Hyundai_CRC':
-                    # Hyundai_CRC 타입일 경우, 사용자가 입력한 전체 데이터에서
-                    # 필요한 부분(3번 바이트부터)을 추출하여 CRC를 계산하고 프레임을 재구성합니다.
-                    # 사용자가 입력한 0, 1, 2번 바이트의 값은 무시됩니다.
-                    # 1. Increment alive counter
-                    alive_count = d.get('alive_counter', 0)
-                    d['alive_counter'] = (alive_count + 1) % 256
-
-                    # 2. Extract user data part (from byte 3 onwards)
-                    user_data_payload = full_data[3:]
-
-                    # 3. Prepare data for CRC: AliveCount + User Data + (0xF800 + CAN_ID)
-                    crc_input_data = bytes([alive_count]) + user_data_payload
-                    crc_extra_val = 0xF800 + can_id
-                    crc_input_data += crc_extra_val.to_bytes(2, 'little')
-
-                    # 4. Calculate CRC
-                    crc_value = calculate_crc16_ccitt_false(crc_input_data)
-
-                    # 5. Final data frame: [CRC(2B, LE)] + [AliveCount(1B)] + [User Data]
-                    final_data = crc_value.to_bytes(2, 'little') + bytes([alive_count]) + user_data_payload
-                    
-                    # get_packet_data에서 이미 길이를 맞췄으므로, 최종 프레임 길이를 다시 맞춥니다.
-                    final_data = final_data.ljust(total_length, b'\x00')[:total_length]
-                else:
-                    final_data = full_data
-
-                msg = can.Message(
-                    arbitration_id=can_id, data=final_data,
-                    is_extended_id=(can_id > 0x7FF), is_fd=d["is_fd"], 
-                    bitrate_switch=d.get("is_brs", False)
-                )
-                bus_obj.send(msg)
-                self.counter_states = next_states
-                self.setText(7, " ".join(f"{b:02X}" for b in final_data))
-
-                if hasattr(self.tx_panel.main_window, 'record_tx_activity'):
-                    self.tx_panel.main_window.record_tx_activity(
-                        d["bus"],
-                        can_id,
-                        final_data,
-                        d["is_fd"]
-                    )
-
-                self.packet_data["count"] += 1
-                self.setText(9, str(self.packet_data["count"]))
-            except Exception as e:
-                print(f"Tx Error: {e}")
-                if self.is_running:
-                    self.stop_timer()
-                    self.tx_panel._update_action_button(self)
-        else:
+        try:
+            task = self._periodic_task
+            runtime = task.runtime if task is not None else TxRuntime(
+                self.packet_data, self.tx_panel, self.counter_states)
+            payload = runtime.send()
+            self._sync_runtime(runtime)
+            if hasattr(self.tx_panel.main_window, 'record_tx_activity'):
+                p = runtime.packet
+                self.tx_panel.main_window.record_tx_activity(p['bus'], p['id'], payload, p['is_fd'])
+        except Exception as exc:
+            print(f'Tx Error: {exc}')
             if self.is_running:
                 self.stop_timer()
                 self.tx_panel._update_action_button(self)
 
-    def start_timer(self):
-        if self.packet_data.get('bus') not in BUS_IDS:
+    def start_timer(self, interval=None):
+        if self._periodic_task is not None:
             self.stop_timer()
+        if not self._can_send():
+            self.is_running = False
             return
-        cycle = self.packet_data["cycle"]
-        if cycle > 0:
-            self.is_running = True
-            self.timer.start(cycle)
-        else:
-            self.send_packet() # 단발성
+        cycle = self.packet_data['cycle'] if interval is None else interval
+        if cycle <= 0:
+            self.send_packet()
+            return
+        runtime = TxRuntime(self.packet_data, self.tx_panel, self.counter_states)
+        runtime.packet['cycle'] = cycle
+        runtime.item = self
+        self._periodic_task = self.tx_panel.start_periodic(runtime)
+        self.is_running = True
 
     def stop_timer(self):
+        task = self._periodic_task
+        if task is not None:
+            task.stop()
+            self._sync_runtime(task.runtime)
+            self._periodic_task = None
         self.is_running = False
-        self.timer.stop()
+        if hasattr(self.tx_panel, '_drain_periodic_events'):
+            self.tx_panel._drain_periodic_events()
 
 class TxPanel(QWidget):
     """메인 창 하단에 들어갈 송신 제어 전체 패널"""
@@ -959,8 +942,76 @@ class TxPanel(QWidget):
         self.db_messages = db_messages
         self.main_window = parent
         self._is_loading = False
+        self._periodic_senders = {}
+        self._periodic_records = queue.Queue(maxsize=20000)
+        self._periodic_errors = queue.SimpleQueue()
+        self._periodic_dropped_records = 0
+        self._periodic_monitor = QTimer(self)
+        self._periodic_monitor.setInterval(20)
+        self._periodic_monitor.timeout.connect(self._drain_periodic_events)
         self.init_ui()
         
+    def start_periodic(self, runtime):
+        bus = runtime.packet['bus']
+        if bus not in self._periodic_senders:
+            self._periodic_senders[bus] = PeriodicSender(
+                bus, self._periodic_completed,
+                lambda task, error: self._periodic_errors.put((task, error)))
+        task = self._periodic_senders[bus].add(runtime)
+        task.reported_missed = 0
+        self._periodic_monitor.start()
+        return task
+
+    def _periodic_completed(self, task, payload, timestamp):
+        # Worker callback: never touch Qt, files or logging here.
+        try:
+            self._periodic_records.put_nowait((task, payload, timestamp, task.missed,
+                                               task.max_lateness_ms))
+        except queue.Full:
+            self._periodic_dropped_records += 1
+
+    def _tx_warning(self, bus, message):
+        if bus is not None and hasattr(self.main_window, 'log_bus_event'):
+            self.main_window.log_bus_event(bus, message, 'WARN')
+        elif hasattr(self.main_window, 'panel_system_event'):
+            self.main_window.panel_system_event(message, 'WARN')
+
+    def _drain_periodic_events(self):
+        while not self._periodic_errors.empty():
+            task, error = self._periodic_errors.get()
+            item = task.runtime.item
+            if item._periodic_task is task:
+                item.stop_timer()
+                self._update_action_button(item)
+            self._tx_warning(task.runtime.packet['bus'], f'TX 중지: {error}')
+        changed = set()
+        for _ in range(500):
+            try:
+                task, payload, timestamp, missed, lateness = self._periodic_records.get_nowait()
+            except queue.Empty:
+                break
+            p = task.runtime.packet
+            if missed > task.reported_missed:
+                self._tx_warning(p['bus'], f"TX 주기 지연: 0x{p['id']:X}, "
+                                 f'누락 {missed - task.reported_missed}회 (누적 {missed}), '
+                                 f'최대 지연 {lateness:.1f} ms')
+                task.reported_missed = missed
+            if hasattr(self.main_window, 'record_tx_activity'):
+                self.main_window.record_tx_activity(p['bus'], p['id'], payload, p['is_fd'], timestamp)
+            if task.runtime.item._periodic_task is task:
+                changed.add(task)
+        for task in changed:
+            task.runtime.item._sync_runtime(task.runtime)
+        if self._periodic_dropped_records:
+            self._tx_warning(None, f'화면 처리 지연으로 TX 기록 {self._periodic_dropped_records}개 생략 (송신은 계속됨)')
+            self._periodic_dropped_records = 0
+        if not any(sender.tasks for sender in self._periodic_senders.values()) and self._periodic_records.empty():
+            self._periodic_monitor.stop()
+
+    def closeEvent(self, event):
+        self.stop_all_timers()
+        super().closeEvent(event)
+
     def init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1059,8 +1110,13 @@ class TxPanel(QWidget):
             item = self.tree.topLevelItem(i)
             if isinstance(item, TxPacketItem) and item.is_running:
                 item.stop_timer()
-                action_widget = self.tree.itemWidget(item, 10)
                 self._update_action_button(item)
+        for sender in self._periodic_senders.values():
+            sender.close()
+        self._periodic_senders.clear()
+        while not self._periodic_records.empty():
+            self._drain_periodic_events()
+        self._periodic_monitor.stop()
 
     def copy_selected_packets(self):
         selected_items = self.tree.selectedItems()
@@ -1225,6 +1281,8 @@ class TxPanel(QWidget):
         dlg.set_packet_data(item.packet_data)
         
         if dlg.exec_() == QDialog.Accepted:
+            was_running = item.is_running
+            item.stop_timer()
             new_data = dlg.get_packet_data()
             new_data["count"] = item.packet_data["count"] # 전송 카운트는 기존 값 유지
             
@@ -1273,6 +1331,8 @@ class TxPanel(QWidget):
             
             # 편집 후, 다이얼로그를 열기 전의 확장 상태를 그대로 복원합니다.
             item.setExpanded(is_expanded)
+            if was_running and new_data['cycle'] > 0:
+                item.start_timer()
             self._update_action_button(item)
             self.auto_save_packets()
             
