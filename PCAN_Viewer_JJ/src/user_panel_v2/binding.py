@@ -78,6 +78,8 @@ def pack_value(payload, binding, value):
 
 
 def validate_config(cfg):
+    from .label_colors import validate_color_rules
+    validate_color_rules(cfg.get('binding', {}).get('label_color_rules', []))
     if cfg.get('widget_type') == 'grid_view':
         from .rx_grid import validate_grid_signals, GRID_COLUMNS, DEFAULT_GRID_COLUMNS
         if cfg.get('behavior') != 'rx':

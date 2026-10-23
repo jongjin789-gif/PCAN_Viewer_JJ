@@ -57,7 +57,8 @@ from .system_log import SystemLog
 from .dbc_identity import database_signature
 from src.utils import get_resource_path
 from .storage import PACKAGE_EXT, load_bundle, save_bundle
-from .styles import TOOL_STYLE, lamp_style
+from .styles import TOOL_STYLE, lamp_style, apply_container_style, apply_drawing_style
+from .label_colors import inferred_raw, label_color_style, validate_color_rules
 from .properties import ToolProperties
 from .binding import reconcile_binding, unpack_raw, matching_signal, bit_positions, quantize_value
 from .commands import command_bindings
@@ -1164,6 +1165,8 @@ class UserPanelWindow(QWidget):
         self._packet_runtimes = runtimes
 
     def set_mode(self, new_mode):
+        if hasattr(self, 'properties'):
+            self.properties.cancel_color_preview()
         if new_mode == 'standard':
             new_mode = 'standby'
         if new_mode == self.mode:
@@ -1224,6 +1227,8 @@ class UserPanelWindow(QWidget):
             self._refresh_bus_status()
 
     def closeEvent(self, event):
+        if hasattr(self, 'properties'):
+            self.properties.cancel_color_preview()
         main = self.main_window
         if (getattr(main, 'user_panel_only', False) and getattr(main, 'user_panel_window', None) is self
                 and not getattr(main, '_is_closing', False) and not getattr(main.session, 'busy', False)):
@@ -1624,6 +1629,7 @@ class UserPanelWindow(QWidget):
         cfg.setdefault("behavior", "none")
 
         binding = cfg.setdefault("binding", {})
+        validate_color_rules(binding.get('label_color_rules', []))
         binding.setdefault("bus", 1)
         binding.setdefault("can_id", 0)
         binding.setdefault("signal_name", None)
@@ -1959,6 +1965,8 @@ class UserPanelWindow(QWidget):
         self._refresh_selection_ui()
 
     def rebuild_grid(self):
+        if hasattr(self, 'properties'):
+            self.properties.cancel_color_preview()
         self.stop_panel_commands("패널 도구 갱신")
         tab_indices = {wid: control.currentIndex() for wid, control in self.widget_controls.items()
                        if isinstance(control, QTabWidget)}
@@ -2017,6 +2025,9 @@ class UserPanelWindow(QWidget):
                 title_widget_for_binding = title
 
             ctrl, child_host = self._create_runtime_widget(cfg)
+            if wtype in ('group_box', 'tab_container'):
+                pages = [page for (ident, _index), page in self._container_pages.items() if ident == cfg['id']]
+                apply_container_style(frame, ctrl, pages, cfg.get('binding', {}))
             if isinstance(ctrl, QTabWidget):
                 index = tab_indices.get(cfg['id'], 0)
                 ctrl.setCurrentIndex(max(0, min(ctrl.count() - 1, index)))
@@ -2548,40 +2559,41 @@ class UserPanelWindow(QWidget):
 
         if wtype == "shape_line":
             line = QFrame()
-            direction = str(binding.get("shape_line_direction", "horizontal"))
-            if direction == "vertical":
-                line.setFrameShape(QFrame.VLine)
-            else:
-                line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Plain)
-            stroke = binding.get("stroke_color", "#333333")
-            width = int(binding.get("stroke_width", 2))
-            qt_style = self._stroke_qt_style(binding.get("stroke_style", "solid"))
-            if direction == "vertical":
-                line.setStyleSheet(f"border: 0; border-left: {width}px {qt_style} {stroke};")
-            else:
-                line.setStyleSheet(f"border: 0; border-top: {width}px {qt_style} {stroke};")
+            apply_drawing_style(line, wtype, binding)
             return line, None
 
         if wtype == "shape_rect":
             rect = QLabel("")
-            stroke = binding.get("stroke_color", "#333333")
-            width = int(binding.get("stroke_width", 2))
-            qt_style = self._stroke_qt_style(binding.get("stroke_style", "solid"))
-            corner_radius = int(binding.get("corner_radius", 0))
-            if binding.get("fill", False):
-                fill = binding.get("fill_color", "#E8F1FF")
-            else:
-                fill = "transparent"
-            rect.setStyleSheet(
-                f"border: {width}px {qt_style} {stroke}; background:{fill}; border-radius:{corner_radius}px;"
-            )
+            apply_drawing_style(rect, wtype, binding)
             return rect, None
 
         label = FittingLabel("-", base_pixel_size=16)
         label.setProperty("panelValue", True)
         label.setAlignment(Qt.AlignCenter)
         return label, None
+
+    def _apply_tool_color_preview(self, widget_id, binding):
+        """Repaint an existing control without changing saved config or history."""
+        cfg = self._cfg_by_id(widget_id)
+        ctrl = self.widget_controls.get(widget_id)
+        frame = self.widget_frames.get(widget_id)
+        if cfg is None or ctrl is None or frame is None:
+            return
+        kind = cfg.get('widget_type')
+        if kind in ('group_box', 'tab_container'):
+            pages = [page for (ident, _index), page in self._container_pages.items() if ident == widget_id]
+            apply_container_style(frame, ctrl, pages, binding)
+        elif kind in ('shape_line', 'shape_rect'):
+            apply_drawing_style(ctrl, kind, binding)
+        elif kind == 'label' and cfg.get('behavior') == 'rx':
+            sample = getattr(ctrl, '_rx_color_sample', None)
+            if sample is None:
+                original = cfg.get('binding', {})
+                payload = self.latest_raw_by_msg.get((original.get('bus', 1), original.get('can_id', 0)))
+                raw = self._extract_raw_value(payload, original) if payload is not None else None
+                if raw is not None:
+                    sample = (raw * float(original.get('scale', 1)) + float(original.get('offset', 0)), raw)
+            ctrl.setStyleSheet(label_color_style(binding, *sample) if sample is not None else '')
 
     def _preview_parent_widget(self, cfg, parent_id=_CURRENT_PARENT):
         target_parent_id = cfg.get('parent_id') if parent_id is _CURRENT_PARENT else parent_id
@@ -3079,13 +3091,7 @@ class UserPanelWindow(QWidget):
         signal = matching_signal(self.db_messages, binding, require_name=True)
         choice = None
         if signal is not None and signal.choices:
-            if raw_value is None:
-                # Simulator/signal-only callbacks supply physical values.
-                scale = float(binding.get('scale', 1))
-                if scale:
-                    candidate = (value - float(binding.get('offset', 0))) / scale
-                    if math.isfinite(candidate) and math.isclose(candidate, round(candidate), rel_tol=0, abs_tol=1e-7):
-                        raw_value = round(candidate)
+            raw_value = inferred_raw(binding, value, raw_value)
             if raw_value is not None:
                 choice = signal.choices.get(raw_value)
         text = str(choice) if choice is not None else self._format_display_value(value)
@@ -3272,6 +3278,13 @@ class UserPanelWindow(QWidget):
 
         if wtype == "label":
             ctrl.setText(self._format_rx_label(binding, v, raw_value, received_unit))
+            if cfg.get('behavior') == 'rx':
+                ctrl._rx_color_sample = (v, raw_value)
+                properties = getattr(self, 'properties', None)
+                color_binding = properties.color_binding(wid, binding) if properties is not None else binding
+                style = label_color_style(color_binding, v, raw_value)
+                if ctrl.styleSheet() != style:
+                    ctrl.setStyleSheet(style)
             return
 
     def _extract_raw_value(self, payload, binding):

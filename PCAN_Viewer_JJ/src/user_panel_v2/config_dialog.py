@@ -4,13 +4,14 @@ import copy
 from .binding import matching_signal, validate_config
 from .packets import find_packet, bind_packet
 from .commands import MULTI_TYPES
+from .color_picker import ColorPicker
+from .property_table import PropertyTable
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -23,6 +24,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStackedWidget,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -59,6 +61,7 @@ def minimum_tool_spans(widget_type, cell_size, grid_rows, grid_cols, config=None
 
 class WidgetConfigDialog(QDialog):
     config_changed = pyqtSignal(dict)
+    color_preview_requested = pyqtSignal(dict)
 
     def __init__(
         self,
@@ -98,6 +101,7 @@ class WidgetConfigDialog(QDialog):
         self.sequence_steps = []
         self.sequence_failure_steps = []
         self.grid_signals = []
+        self.label_color_rules = []
 
         self._build_ui()
         self._load_db_messages()
@@ -115,24 +119,34 @@ class WidgetConfigDialog(QDialog):
 
         def _make_group(title):
             group = QGroupBox(title)
-            form = QFormLayout(group)
-            form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
-            if self.embedded:
-                form.setRowWrapPolicy(QFormLayout.WrapLongRows)
-            form.setContentsMargins(8, 8, 8, 8)
-            return group, form
+            layout = QVBoxLayout(group)
+            layout.setContentsMargins(6, 6, 6, 6)
+            table = PropertyTable(group)
+            layout.addWidget(table)
+            return group, table
 
         grp_tool, form_tool = _make_group("도구 설정 (Tool)")
         grp_comm, form_comm = _make_group("통신 설정 (CAN/DBC)")
         grp_value, form_value = _make_group("값/동작 설정 (Value/Behavior)")
         grp_rx, form_rx = _make_group("RX 조건 설정 (RX Conditions)")
-        grp_shape, form_shape = _make_group("도형 스타일 설정 (Shape Style)")
+        grp_shape, form_shape = _make_group("색상 / 스타일 설정")
 
         self.grp_tool = grp_tool
         self.grp_comm = grp_comm
         self.grp_value = grp_value
         self.grp_rx = grp_rx
         self.grp_shape = grp_shape
+        self.grp_label_colors = QGroupBox('수신 라벨 색상')
+        color_layout = QVBoxLayout(self.grp_label_colors)
+        self.label_color_summary = QLabel('등록된 색상 규칙: 0개')
+        self.label_color_summary.setWordWrap(True)
+        color_layout.addWidget(self.label_color_summary)
+        self.btn_label_colors = QPushButton('색상 규칙 표 편집…')
+        self.btn_label_colors.clicked.connect(self._edit_label_colors)
+        color_layout.addWidget(self.btn_label_colors)
+        color_hint = QLabel('Enum별 또는 값 조건별로 배경색·글자색을 설정합니다.\n규칙은 별도의 표에서 한 행씩 편집합니다.')
+        color_hint.setWordWrap(True)
+        color_layout.addWidget(color_hint)
         self.grp_grid = QGroupBox('그리드 뷰 신호')
         grid_layout = QVBoxLayout(self.grp_grid)
         self.btn_grid_signals = QPushButton('DBC 트리에서 신호 선택…')
@@ -422,24 +436,25 @@ class WidgetConfigDialog(QDialog):
         self.combo_shape_line_dir.addItems(["horizontal", "vertical"])
         form_shape.addRow("Line Direction", self.combo_shape_line_dir)
 
-        self.edit_stroke_color = QLineEdit("#333333")
+        self.edit_stroke_color = ColorPicker("#333333")
         self.spin_stroke_width = QSpinBox()
         self.spin_stroke_width.setRange(1, 20)
         self.spin_stroke_width.setValue(2)
         self.combo_stroke_style = QComboBox()
         self.combo_stroke_style.addItems(["solid", "dash", "dot"])
-        form_shape.addRow("Stroke Color", self.edit_stroke_color)
-        form_shape.addRow("Stroke Width", self.spin_stroke_width)
-        form_shape.addRow("Stroke Style", self.combo_stroke_style)
+        form_shape.addRow("선 / 테두리 색상", self.edit_stroke_color)
+        form_shape.addRow("선 / 테두리 두께", self.spin_stroke_width)
+        form_shape.addRow("선 / 테두리 스타일", self.combo_stroke_style)
 
-        self.chk_fill = QCheckBox("Fill")
-        self.edit_fill_color = QLineEdit("#E8F1FF")
+        self.chk_fill = QCheckBox("배경색 채우기")
+        self.edit_fill_color = ColorPicker("#E8F1FF")
+        self.edit_fill_color.colorSelected.connect(lambda _color: self.chk_fill.setChecked(True))
         self.spin_corner_radius = QSpinBox()
         self.spin_corner_radius.setRange(0, 100)
         self.spin_corner_radius.setValue(0)
-        form_shape.addRow("Fill", self.chk_fill)
-        form_shape.addRow("Fill Color", self.edit_fill_color)
-        form_shape.addRow("Corner Radius", self.spin_corner_radius)
+        form_shape.addRow("채우기", self.chk_fill)
+        form_shape.addRow("배경색", self.edit_fill_color)
+        form_shape.addRow("모서리 둥글기", self.spin_corner_radius)
 
         self.edit_unit = QLineEdit("")
         form_comm.addRow("Unit", self.edit_unit)
@@ -514,15 +529,6 @@ class WidgetConfigDialog(QDialog):
         for w in compact_widgets:
             w.setMaximumWidth(260)
 
-        form_wrap = QWidget()
-        form_wrap_lay = QVBoxLayout(form_wrap)
-        form_wrap_lay.setContentsMargins(0, 0, 0, 0)
-        form_wrap_lay.setSpacing(6)
-        form_wrap_lay.addWidget(grp_tool)
-        form_wrap_lay.addWidget(self.grp_tabs)
-        form_wrap_lay.addWidget(self.grp_grid)
-        form_wrap_lay.addWidget(grp_comm)
-        form_wrap_lay.addWidget(grp_value)
         self.grp_commands = QGroupBox("멀티 명령")
         commands_layout = QVBoxLayout(self.grp_commands)
         self.chk_primary_enabled = QCheckBox("기본 명령 활성 (위 통신/값 설정)")
@@ -545,18 +551,26 @@ class WidgetConfigDialog(QDialog):
         self.command_list.itemChanged.connect(self._command_checked)
         self.command_list.itemDoubleClicked.connect(lambda _: self._edit_command(True))
         self.chk_primary_enabled.toggled.connect(self._on_any_changed)
-        form_wrap_lay.addWidget(self.grp_commands)
-        form_wrap_lay.addWidget(grp_rx)
-        form_wrap_lay.addWidget(grp_shape)
-        form_wrap_lay.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setWidget(form_wrap)
-
-        root.addWidget(scroll, 1)
+        self.settings_tabs = QTabWidget()
+        self._setting_sections = [
+            ('기본', [grp_tool, self.grp_tabs]),
+            ('CAN / DBC', [grp_comm]),
+            ('값 / 동작', [grp_value, self.grp_commands]),
+            ('색상 / 조건', [self.grp_label_colors, grp_rx, grp_shape]),
+            ('그리드', [self.grp_grid]),
+        ]
+        for name, groups in self._setting_sections:
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(2, 2, 2, 2)
+            for group in groups:
+                layout.addWidget(group)
+            layout.addStretch()
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(page)
+            self.settings_tabs.addTab(scroll, name)
+        root.addWidget(self.settings_tabs, 1)
         self.btn_sequence = QPushButton("명령 시퀀스 설정")
         self.btn_sequence.clicked.connect(self._edit_sequence)
         root.addWidget(self.btn_sequence)
@@ -781,6 +795,56 @@ class WidgetConfigDialog(QDialog):
     def _register_row(self, form, field_widget):
         self._row_handles[field_widget] = (form, field_widget)
 
+    def _refresh_color_summary(self):
+        enabled = sum(rule.get('enabled', True) for rule in self.label_color_rules)
+        self.label_color_summary.setText(f'등록된 색상 규칙: {len(self.label_color_rules)}개 / 사용: {enabled}개')
+
+    def _edit_label_colors(self):
+        from .label_color_dialog import LabelColorRulesDialog
+        dialog = LabelColorRulesDialog(self.label_color_rules, self._enum_entries, self)
+        dialog.editor.rules_changed.connect(self._preview_label_color_rules)
+        try:
+            if dialog.exec_() == dialog.Accepted:
+                self.label_color_rules = dialog.editor.rules()
+                self._refresh_color_summary()
+                self._on_any_changed()
+        finally:
+            self._emit_color_preview()
+            dialog.deleteLater()
+
+    def _preview_label_color_rules(self, rules):
+        from .label_colors import validate_color_rules
+        try:
+            validate_color_rules(rules)
+        except ValueError:
+            return
+        config = self.get_config(strict=False, resolve_packet=False)
+        if config is not None:
+            config['binding']['label_color_rules'] = copy.deepcopy(rules)
+            self.color_preview_requested.emit(config)
+
+    def _emit_color_preview(self):
+        config = self.get_config(strict=False, resolve_packet=False)
+        if config is not None:
+            self.color_preview_requested.emit(config)
+
+    def restore_color_settings(self, binding):
+        """Discard appearance edits while preserving other pending property edits."""
+        was_loading = self._loading
+        self._loading = True
+        try:
+            self.edit_stroke_color.setText(binding.get('stroke_color', '#333333'))
+            self.edit_fill_color.setText(binding.get('fill_color', '#E8F1FF'))
+            self.chk_fill.setChecked(binding.get('fill', False))
+            self.spin_stroke_width.setValue(binding.get('stroke_width', 2))
+            self.combo_stroke_style.setCurrentText(binding.get('stroke_style', 'solid'))
+            self.spin_corner_radius.setValue(binding.get('corner_radius', 0))
+            self.combo_shape_line_dir.setCurrentText(binding.get('shape_line_direction', 'horizontal'))
+            self.label_color_rules = copy.deepcopy(binding.get('label_color_rules', []))
+            self._refresh_color_summary()
+        finally:
+            self._loading = was_loading
+
     def _precision_decimals(self):
         value = self.combo_value_precision.currentData()
         if value in (3, 6):
@@ -895,7 +959,7 @@ class WidgetConfigDialog(QDialog):
         self.grp_commands.setVisible(self.allow_multi and is_tx and wtype in MULTI_TYPES)
 
         self.grp_comm.setVisible(not is_shape and not is_group_container and not is_grid)
-        self.grp_shape.setVisible(is_shape)
+        self.grp_shape.setVisible(is_shape or is_group_container)
         self.grp_value.setVisible(not is_shape and not is_group_container and not is_grid)
         is_sequence = wtype == "sequence"
         self.btn_sequence.setVisible(is_sequence)
@@ -903,6 +967,9 @@ class WidgetConfigDialog(QDialog):
             self.grp_comm.hide()
             self.grp_value.hide()
         self.grp_rx.setVisible(is_rx and wtype == "status_lamp")
+        self.grp_label_colors.setVisible(is_rx and wtype == 'label')
+        for index, (_name, groups) in enumerate(self._setting_sections):
+            self.settings_tabs.setTabVisible(index, any(not group.isHidden() for group in groups))
 
         show_signal_map = (not is_shape and not is_group_container) and (is_tx or is_rx)
         for w in (
@@ -947,10 +1014,12 @@ class WidgetConfigDialog(QDialog):
         self.stack_toggle_on_value.setCurrentIndex(enum_index)
         self.stack_toggle_off_value.setCurrentIndex(enum_index)
 
-        self._set_row_visible(self.combo_shape_line_dir, is_shape and wtype == "shape_line")
-        self._set_row_visible(self.chk_fill, is_shape and wtype == "shape_rect")
-        self._set_row_visible(self.edit_fill_color, is_shape and wtype == "shape_rect")
-        self._set_row_visible(self.spin_corner_radius, is_shape and wtype == "shape_rect")
+        self._set_row_visible(self.combo_shape_kind, is_shape)
+        self._set_row_visible(self.combo_shape_line_dir, wtype == "shape_line")
+        has_background = wtype == "shape_rect" or is_group_container
+        self._set_row_visible(self.chk_fill, has_background)
+        self._set_row_visible(self.edit_fill_color, has_background)
+        self._set_row_visible(self.spin_corner_radius, has_background)
 
         if has_enum:
             self.label_value_hint.setText("Enum signal detected: choose value from enum list (raw and physical values shown).")
@@ -1074,6 +1143,7 @@ class WidgetConfigDialog(QDialog):
             return
         self._update_visibility()
         self._update_help_text()
+        self._emit_color_preview()
         if not self.chk_live_preview.isChecked():
             return
         cfg = self.get_config(strict=False)
@@ -1353,6 +1423,8 @@ class WidgetConfigDialog(QDialog):
             },
         }
 
+        if self.label_color_rules:
+            config['binding']['label_color_rules'] = copy.deepcopy(self.label_color_rules)
         if config['widget_type'] == 'grid_view':
             config['binding']['grid_signals'] = copy.deepcopy(self.grid_signals)
             config['binding']['grid_columns'] = [key for key, check in self.grid_column_checks.items()
@@ -1397,6 +1469,8 @@ class WidgetConfigDialog(QDialog):
         self.combo_widget_type.setCurrentText(config.get("widget_type", self.combo_widget_type.currentText()))
 
         binding = config.get("binding", {})
+        self.label_color_rules = copy.deepcopy(binding.get('label_color_rules', []))
+        self._refresh_color_summary()
         self.grid_signals = copy.deepcopy(binding.get('grid_signals', []))
         from .rx_grid import DEFAULT_GRID_COLUMNS
         for key, check in self.grid_column_checks.items():

@@ -1,4 +1,6 @@
 """Presentation for generated panel tools; independent of saved configuration."""
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor
 
 TOOL_STYLE = """
 QFrame[panelCard="true"] {
@@ -66,3 +68,64 @@ def lamp_style(is_on):
         f"background:{background}; color:{foreground}; border:1px solid {border};"
         "border-radius:6px; padding:3px; font-weight:600;"
     )
+
+
+def apply_container_style(frame, control, pages, binding):
+    """Color container surfaces without recoloring their child tools."""
+    stroke = QColor(binding.get('stroke_color', '#333333'))
+    stroke = stroke.name() if stroke.isValid() else '#333333'
+    color = QColor(binding.get('fill_color', '#E8F1FF'))
+    if not color.isValid():
+        color = QColor('#E8F1FF')
+    filled = bool(binding.get('fill', False))
+    background = color.name() if filled else 'transparent'
+    foreground = '#ffffff' if filled and color.lightnessF() < 0.5 else '#334155'
+    width = max(1, min(20, int(binding.get('stroke_width', 2))))
+    line_style = {'dash': 'dashed', 'dot': 'dotted'}.get(binding.get('stroke_style'), 'solid')
+    radius = max(0, min(100, int(binding.get('corner_radius', 0))))
+    border = f'{width}px {line_style} {stroke}'
+    frame.setStyleSheet(TOOL_STYLE)
+    if filled:
+        frame.setStyleSheet(TOOL_STYLE + (
+            f'QFrame[panelCard="true"] {{ background: {background}; }}'
+            f'QFrame[panelCard="true"][selected="true"] {{ background: {background}; }}'
+        ))
+    control.setObjectName('panelGroupContainer')
+    control.setStyleSheet(
+        f'QGroupBox#panelGroupContainer {{ background: {background}; color: {foreground}; '
+        f'border: {border}; border-radius: {radius}px; margin-top: 10px; }}'
+        'QGroupBox#panelGroupContainer::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }'
+        f'QTabWidget#panelGroupContainer::pane {{ background: {background}; '
+        f'border: {border}; border-radius: {radius}px; }}'
+    )
+    if hasattr(control, 'tabBar'):
+        tab_background = color.lighter(120).name() if filled else '#f1f5f9'
+        selected_background = background if filled else '#dbeafe'
+        control.tabBar().setStyleSheet(
+            f'QTabBar::tab {{ background: {tab_background}; color: {foreground}; padding: 4px 10px; }}'
+            f'QTabBar::tab:selected {{ background: {selected_background}; color: {foreground}; '
+            f'font-weight: bold; border-bottom: 2px solid {stroke}; }}'
+        )
+    for page in pages:
+        for surface in (page.viewport(), page.canvas):
+            surface.setObjectName('panelContainerSurface')
+            surface.setAttribute(Qt.WA_StyledBackground, True)
+            surface.setStyleSheet(f'QWidget#panelContainerSurface {{ background: {background}; }}')
+
+
+def apply_drawing_style(control, kind, binding):
+    stroke = QColor(binding.get('stroke_color', '#333333'))
+    stroke = stroke.name() if stroke.isValid() else '#333333'
+    width = max(1, min(20, int(binding.get('stroke_width', 2))))
+    line_style = {'dash': 'dashed', 'dot': 'dotted'}.get(binding.get('stroke_style'), 'solid')
+    border = f'{width}px {line_style} {stroke}'
+    if kind == 'shape_line':
+        vertical = binding.get('shape_line_direction') == 'vertical'
+        control.setFrameShape(control.VLine if vertical else control.HLine)
+        control.setFrameShadow(control.Plain)
+        control.setStyleSheet(f'border: 0; border-{"left" if vertical else "top"}: {border};')
+    else:
+        color = QColor(binding.get('fill_color', '#E8F1FF'))
+        fill = color.name() if color.isValid() and binding.get('fill', False) else 'transparent'
+        radius = max(0, min(100, int(binding.get('corner_radius', 0))))
+        control.setStyleSheet(f'border: {border}; background:{fill}; border-radius:{radius}px;')

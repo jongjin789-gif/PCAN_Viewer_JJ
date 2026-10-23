@@ -8,6 +8,7 @@ from src.session_storage import compile_formula
 
 
 def restore_geometry(window, values):
+    """Restore client coordinates while keeping the whole window frame on screen."""
     if not values:
         return
     x, y, width, height = map(int, values)
@@ -16,10 +17,15 @@ def restore_geometry(window, values):
     screen = next((s for s in screens if s.availableGeometry().contains(rect.center())),
                   QApplication.primaryScreen())
     area = screen.availableGeometry()
-    rect.setWidth(min(rect.width(), area.width()))
-    rect.setHeight(min(rect.height(), area.height()))
-    rect.moveLeft(max(area.left(), min(rect.left(), area.right() - rect.width() + 1)))
-    rect.moveTop(max(area.top(), min(rect.top(), area.bottom() - rect.height() + 1)))
+    # Staged session windows have not been shown yet. Create the native handle
+    # so Qt can report their title bar and border margins before positioning.
+    window.winId()
+    margins = window.windowHandle().frameMargins()
+    client_area = area.marginsRemoved(margins)
+    rect.setWidth(min(rect.width(), client_area.width()))
+    rect.setHeight(min(rect.height(), client_area.height()))
+    rect.moveLeft(max(client_area.left(), min(rect.left(), client_area.right() - rect.width() + 1)))
+    rect.moveTop(max(client_area.top(), min(rect.top(), client_area.bottom() - rect.height() + 1)))
     window.setGeometry(rect)
 
 

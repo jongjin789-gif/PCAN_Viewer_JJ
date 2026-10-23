@@ -3,10 +3,10 @@ from src.bus_config import BUS_IDS
 """Docked tool editor and explicit, field-wise batch updates."""
 import copy
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QCheckBox, QComboBox,
-    QSpinBox, QFormLayout, QGroupBox, QMessageBox,
+    QSpinBox, QFormLayout, QGroupBox, QMessageBox, QHBoxLayout, QApplication,
 )
 from .config_dialog import WidgetConfigDialog
 from .binding import reconcile_binding, validate_config
@@ -31,7 +31,13 @@ class ToolProperties(QWidget):
         self.layout_root = QVBoxLayout(self)
         self.layout_root.setContentsMargins(4, 0, 0, 0)
         self.heading = QLabel("Tool Properties")
-        self.layout_root.addWidget(self.heading)
+        heading_row = QHBoxLayout()
+        heading_row.addWidget(self.heading, 1)
+        self.btn_open_window = QPushButton('창으로 보기…')
+        self.btn_open_window.clicked.connect(self.open_editor_window)
+        self.btn_open_window.setEnabled(False)
+        heading_row.addWidget(self.btn_open_window)
+        self.layout_root.addLayout(heading_row)
         self.hint = QLabel("Select a tool. Ctrl/Shift selects multiple tools.\nEdit values, then apply properties.")
         self.hint.setWordWrap(True)
         self.layout_root.addWidget(self.hint)
@@ -40,12 +46,16 @@ class ToolProperties(QWidget):
         self.signature = None
         self.checks = {}
         self.fields = {}
+        self._preview_id = None
+        self._preview_binding = None
+        self._window_editor = None
 
     def refresh(self, force=False):
         configs = self.panel.selected_configs()
         signature = (self.panel.mode, repr(configs), repr(self.panel.db_messages), repr(self.panel.tx_packets))
         if not force and signature == self.signature:
             return
+        self.cancel_color_preview()
         self.signature = signature
         if self.body is not None:
             self.layout_root.removeWidget(self.body)
@@ -58,6 +68,7 @@ class ToolProperties(QWidget):
         layout = QVBoxLayout(self.body)
         layout.setContentsMargins(0, 0, 0, 0)
         self.heading.setText(f"Tool Properties · {len(configs)} selected")
+        self.btn_open_window.setEnabled(self.panel.mode == 'edit' and len(configs) == 1)
         if not configs:
             layout.addStretch()
             return
@@ -73,6 +84,7 @@ class ToolProperties(QWidget):
                 tx_packets=self.panel.tx_packets,
             )
             self.editor.config_changed.connect(self.apply_single)
+            self.editor.color_preview_requested.connect(self.preview_colors)
             layout.addWidget(self.editor, 1)
         else:
             note = QLabel("Only checked fields are applied.\nMixed values are marked (Mixed). Size is in grid cells.")
@@ -153,22 +165,128 @@ class ToolProperties(QWidget):
         except ValueError:
             return 0
 
-    def apply_single(self, config):
+    def apply_single(self, config, tab_map=None):
         if self.panel.mode != "edit":
             return
         original = self.panel._cfg_by_id(config["id"])
         if original is None:
             return
+        self.cancel_color_preview(reset_editor=False)
         updated = copy.deepcopy(original)
         updated.update({k: v for k, v in config.items() if k not in ("binding", "z_index")})
         updated.setdefault("binding", {}).update(config["binding"])
-        tab_maps = ({config['id']: self.editor.tab_index_map()}
+        # The editor omits an empty rule list; removing all rows must clear saved rules.
+        updated['binding'].pop('label_color_rules', None)
+        if config['binding'].get('label_color_rules'):
+            updated['binding']['label_color_rules'] = copy.deepcopy(config['binding']['label_color_rules'])
+        tab_maps = ({config['id']: tab_map if tab_map is not None else self.editor.tab_index_map()}
                     if original.get('widget_type') == config.get('widget_type') == 'tab_container' else {})
         self.commit([updated], {}, tab_maps)
+
+    @staticmethod
+    def _within_scope(obj, scope):
+        if scope is None:
+            return False
+        while obj is not None:
+            if obj is scope:
+                return True
+            obj = obj.parent()
+        return False
+
+    def eventFilter(self, watched, event):
+        if self._preview_id is None:
+            return False
+        if event.type() == QEvent.ApplicationDeactivate:
+            self.cancel_color_preview()
+        elif (event.type() in (QEvent.MouseButtonPress, QEvent.KeyPress) and isinstance(watched, QWidget)
+              or event.type() == QEvent.Shortcut):
+            scopes = (self.editor, self._window_editor, self.btn_open_window)
+            if not any(self._within_scope(watched, scope) for scope in scopes):
+                self.cancel_color_preview()
+        return False
+
+    def color_binding(self, widget_id, original):
+        return self._preview_binding if widget_id == self._preview_id else original
+
+    def preview_colors(self, config):
+        if self.panel.mode != 'edit':
+            return
+        original = self.panel._cfg_by_id(config['id'])
+        if original is None or original.get('widget_type') not in (
+                'group_box', 'tab_container', 'shape_line', 'shape_rect', 'label'):
+            return
+        if self._preview_id is not None and self._preview_id != config['id']:
+            self.cancel_color_preview()
+        binding = copy.deepcopy(original.get('binding', {}))
+        for key in ('stroke_color', 'fill_color', 'fill', 'stroke_width', 'stroke_style',
+                    'corner_radius', 'shape_line_direction', 'label_color_rules'):
+            if key in config['binding']:
+                binding[key] = copy.deepcopy(config['binding'][key])
+            elif key == 'label_color_rules':
+                if binding.get(key):
+                    binding.pop(key, None)
+        if binding == original.get('binding', {}):
+            self.cancel_color_preview(reset_editor=False)
+            return
+        if self._preview_id is None:
+            QApplication.instance().installEventFilter(self)
+        self._preview_id = config['id']
+        self._preview_binding = binding
+        self.panel._apply_tool_color_preview(self._preview_id, binding)
+
+    def cancel_color_preview(self, reset_editor=True):
+        widget_id = self._preview_id
+        self._preview_id = self._preview_binding = None
+        if widget_id is None:
+            return
+        QApplication.instance().removeEventFilter(self)
+        original = self.panel._cfg_by_id(widget_id)
+        if original is None:
+            return
+        binding = original.get('binding', {})
+        self.panel._apply_tool_color_preview(widget_id, binding)
+        if reset_editor:
+            for editor in (self.editor, self._window_editor):
+                if editor is not None and editor._config_id == widget_id:
+                    editor.restore_color_settings(binding)
+
+    def open_editor_window(self):
+        if self.panel.mode != 'edit' or self.editor is None:
+            return
+        config = self.editor.get_config(strict=True)
+        if config is None:
+            return
+        # Start with uncommitted dock edits. Applying the dialog commits once;
+        # cancellation keeps both the saved tool and the dock's pending values.
+        dialog = WidgetConfigDialog(
+            self.panel.db_messages, self, preset=config, live_preview_default=False,
+            grid_rows=self.panel.grid_rows, grid_cols=self.panel.grid_cols,
+            grid_cell_size=self.panel.grid_cell_size,
+            parent_candidates=self.panel._group_parent_candidates(exclude_id=config['id']),
+            tx_packets=self.panel.tx_packets,
+        )
+        dialog.setWindowTitle('도구 설정 · ' + config.get('title', 'Widget'))
+        dialog.resize(980, 720)
+        dialog.color_preview_requested.connect(self.preview_colors)
+        self._window_editor = dialog
+        tab = self.editor.settings_tabs.currentIndex()
+        dialog.settings_tabs.setCurrentIndex(tab)
+        try:
+            if dialog.exec_() == dialog.Accepted:
+                # Map original tab indices through dock edits and then dialog edits.
+                mapping = self.editor.tab_index_map()
+                second = dialog.tab_index_map()
+                dialog_map = [second[max(0, min(len(second) - 1, index))] for index in mapping]
+                self.apply_single(dialog.get_config(), dialog_map)
+        finally:
+            self.cancel_color_preview()
+            self._window_editor = None
+            dialog.deleteLater()
 
     def apply_checked(self):
         if self.panel.mode != "edit":
             return
+        self.cancel_color_preview()
         configs = copy.deepcopy(self.panel.selected_configs())
         speed = {}
         for key, check in self.checks.items():

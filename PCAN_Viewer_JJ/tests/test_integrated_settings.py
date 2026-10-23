@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtWidgets import QApplication
 from cantools.database.can import Database, Message, Signal
 from src.main_window import UniversalCANMonitor
@@ -110,6 +110,45 @@ class IntegratedSettingsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.session.prepare(saved)
         self.assertIs(self.main.user_panel_window, panel)
+
+    def test_oversized_panel_and_graph_restore_with_title_bars_on_screen(self):
+        self.db()
+        self.graph()
+        self.main.open_user_panel()
+        saved = self.session.capture()
+        area = QRect(0, 0, 1920, 1032)
+        screen = Mock()
+        screen.availableGeometry.return_value = area
+        oversized = [area.left(), area.top(), area.width() + 1000, area.height() + 1000]
+        saved['panel']['geometry'] = oversized
+        saved['graphs'][0]['geometry'] = oversized
+        write_session(self.file, saved)
+        with patch('src.session_graph.QApplication.screens', return_value=[screen]), \
+             patch('src.session_graph.QApplication.primaryScreen', return_value=screen):
+            self.assertTrue(self.session.load(self.file))
+        self.app.processEvents()
+        self.session.report.assert_not_called()
+        for window in [self.main.user_panel_window, *self.main.active_graphs]:
+            self.assertTrue(window.isVisible())
+            self.assertTrue(area.contains(window.frameGeometry()), window.frameGeometry().getRect())
+
+    def test_rx_label_color_rules_survive_integrated_restore(self):
+        self.db()
+        self.main.open_user_panel()
+        rule = dict(enabled=True, source='value', op='between', a=5, b=10,
+                    target='background', color='#DCFCE7')
+        self.main.user_panel_window._load_panel_data(dict(widgets=[dict(
+            id='rx', widget_type='label', behavior='rx', binding=dict(bus=1, can_id=0x123,
+            signal_name='Value', start_bit=0, bit_length=8, label_color_rules=[rule]))]))
+        write_session(self.file, self.session.capture())
+        self.assertTrue(self.session.load(self.file))
+        self.session.report.assert_not_called()
+        panel = self.main.user_panel_window
+        self.assertEqual(panel._cfg_by_id('rx')['binding']['label_color_rules'], [rule])
+        panel.on_message_update(1, 0x123, b'\x07', 0)
+        self.assertIn('#dcfce7', panel.widget_controls['rx'].styleSheet())
+        panel.on_message_update(1, 0x123, b'\x04', 0)
+        self.assertEqual(panel.widget_controls['rx'].styleSheet(), '')
 
     def test_roundtrip_embedded_db_graph_panel_and_stopped_tx(self):
         raw = self.db()
